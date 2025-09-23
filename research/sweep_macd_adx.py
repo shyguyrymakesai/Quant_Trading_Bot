@@ -1,4 +1,5 @@
 import itertools
+import os
 import warnings
 from contextlib import contextmanager
 import numpy as np
@@ -7,10 +8,14 @@ import ccxt
 import yfinance as yf
 from backtesting import Backtest, Strategy
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Use TA-Lib exclusively
 USE_TALIB = True
 import talib
+
+# Fast sweep toggle
+FAST_MODE = True  # flip to False for full sweep
 
 
 def _parse_period_days(period: str | int | None) -> int:
@@ -100,6 +105,19 @@ def to_mbtc(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# Cache data per (symbol, timeframe) to avoid repeated loads
+_DATA_CACHE: dict[tuple[str, str], pd.DataFrame] = {}
+
+
+def get_df(symbol: str, timeframe: str) -> pd.DataFrame:
+    key = (symbol, timeframe)
+    if key not in _DATA_CACHE:
+        df = load_df(symbol=symbol, timeframe=timeframe, period="1825d", limit=1500)
+        df = to_mbtc(df)  # integer units for backtesting only
+        _DATA_CACHE[key] = df
+    return _DATA_CACHE[key]
+
+
 class Strat(Strategy):
     macd_fast = 12
     macd_slow = 26
@@ -176,6 +194,35 @@ class Strat(Strategy):
             self.sell(size=units)
 
 
+def eval_combo(args):
+    sym, tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol = args
+    df = get_df(sym, tf)
+    params = dict(
+        macd_fast=mf,
+        macd_slow=ms,
+        macd_signal=sig,
+        adx_len=14,
+        adx_threshold=adx_thr,
+        vol_lb=vol_lb,
+        target_vol=tgt_vol,
+    )
+    is_stats, oos_stats = run_split_backtest(df, params, commission=0.0012)
+    return {
+        "symbol": sym,
+        "tf": tf,
+        "macd": f"{mf}/{ms}/{sig}",
+        "adx_thr": adx_thr,
+        "vol_lb": vol_lb,
+        "tgt_vol": tgt_vol,
+        "IS_Sharpe": float(is_stats["Sharpe Ratio"]),
+        "IS_MaxDD": float(is_stats["Max. Drawdown [%]"]),
+        "IS_Trades": int(is_stats["# Trades"]),
+        "OOS_Sharpe": float(oos_stats["Sharpe Ratio"]),
+        "OOS_MaxDD": float(oos_stats["Max. Drawdown [%]"]),
+        "OOS_Trades": int(oos_stats["# Trades"]),
+    }
+
+
 def run_split_backtest(df, params, commission=0.0012):
     k = int(len(df) * 0.7)
     df_is, df_oos = df.iloc[:k], df.iloc[k:]
@@ -247,17 +294,28 @@ def walk_forward_scores(df, params, n_folds=4, commission=0.0012):
 
 
 def main():
-    grids = {
-        "timeframe": ["1h", "4h"],
-        "macd_fast": [5, 6, 8, 10, 12],
-        "macd_slow": [19, 24, 26, 30, 35],
-        "macd_signal": [5, 9, 10],
-        # ADX==0 means "no ADX filter" → handled in next() below
-        "adx_threshold": [0, 5, 10, 15, 20, 25],
-        "vol_lb": [10, 20, 30, 40],
-        # try higher target vol so positions actually size up and produce more fills
-        "target_vol": [0.02, 0.03, 0.05, 0.10],
-    }
+    # Grids: slim in FAST_MODE, full otherwise
+    if FAST_MODE:
+        grids = {
+            "timeframe": ["1h"],
+            "macd_fast": [5, 8, 10],
+            "macd_slow": [24, 30, 35],
+            "macd_signal": [5, 9],
+            "adx_threshold": [0, 10, 20],
+            "vol_lb": [20, 30],
+            "target_vol": [0.02, 0.05],
+        }
+    else:
+        grids = {
+            "timeframe": ["1h", "4h"],
+            "macd_fast": [5, 6, 8, 10, 12],
+            "macd_slow": [19, 24, 26, 30, 35],
+            "macd_signal": [5, 9, 10],
+            "adx_threshold": [0, 5, 10, 15, 20, 25],
+            "vol_lb": [10, 20, 30, 40],
+            "target_vol": [0.02, 0.03, 0.05, 0.10],
+        }
+
     combos = list(
         itertools.product(
             grids["timeframe"],
@@ -270,62 +328,39 @@ def main():
         )
     )
 
-    symbols = ["BTC-USD", "ETH-USD", "SOL-USD", "LTC-USD", "ADA-USD"]
-    rows = []
+    symbols = (
+        ["BTC-USD", "ETH-USD"]
+        if FAST_MODE
+        else ["BTC-USD", "ETH-USD", "SOL-USD", "LTC-USD", "ADA-USD"]
+    )
 
+    # Prepare jobs for parallel execution
+    jobs = []
     for sym in symbols:
-        df_cache = {}
         for tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol in combos:
-            if tf not in df_cache:
-                df_cache[tf] = load_df(
-                    symbol=sym, timeframe=tf, period="1825d", limit=1500
-                )
-                df_cache[tf] = to_mbtc(df_cache[tf])  # integer units for backtesting
-            df = df_cache[tf]
+            jobs.append((sym, tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol))
 
-            params = dict(
-                macd_fast=mf,
-                macd_slow=ms,
-                macd_signal=sig,
-                adx_len=14,
-                adx_threshold=adx_thr,
-                vol_lb=vol_lb,
-                target_vol=tgt_vol,
-            )
+    results = []
+    workers = (
+        max(1, (os.cpu_count() or 4) - 1)
+        if FAST_MODE
+        else max(1, (os.cpu_count() or 4) - 2)
+    )
 
-            is_stats, oos_stats = run_split_backtest(df, params, commission=0.0012)
-
-            def pick(s):
-                return dict(
-                    Sharpe=float(s["Sharpe Ratio"]),
-                    MaxDD=float(s["Max. Drawdown [%]"]),
-                    Trades=int(s["# Trades"]),
-                )
-
-            rows.append(
-                {
-                    "symbol": sym,
-                    "tf": tf,
-                    "macd": f"{mf}/{ms}/{sig}",
-                    "adx_thr": adx_thr,
-                    "vol_lb": vol_lb,
-                    "tgt_vol": tgt_vol,
-                    "IS_Sharpe": pick(is_stats)["Sharpe"],
-                    "IS_MaxDD": pick(is_stats)["MaxDD"],
-                    "IS_Trades": pick(is_stats)["Trades"],
-                    "OOS_Sharpe": pick(oos_stats)["Sharpe"],
-                    "OOS_MaxDD": pick(oos_stats)["MaxDD"],
-                    "OOS_Trades": pick(oos_stats)["Trades"],
-                }
-            )
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(eval_combo, j) for j in jobs]
+        for f in as_completed(futs):
+            r = f.result()
+            results.append(r)
             print(
-                f"Done {sym} {tf} MACD {mf}/{ms}/{sig} ADX>{adx_thr} vol_lb={vol_lb} tgt={tgt_vol}"
+                f"Done {r['symbol']} {r['tf']} MACD {r['macd']} ADX>{r['adx_thr']} vol_lb={r['vol_lb']} tgt={r['tgt_vol']}"
             )
 
-    out = pd.DataFrame(rows)
+    out = pd.DataFrame(results)
 
     # Minimum trades filter to avoid spurious Sharpe from tiny samples
-    MIN_TRADES = 30  # require >=30 IS and OOS trades
+    MIN_TRADES = 20 if FAST_MODE else 30  # require >=X IS and OOS trades
+    MIN_OOS_SHARPE = 0.5  # early prune threshold for WFV candidates
     out_f = out[
         (out["OOS_Trades"] >= MIN_TRADES) & (out["IS_Trades"] >= MIN_TRADES)
     ].copy()
@@ -356,12 +391,16 @@ def main():
         if len(sub):
             print(f"\nTOP for {sym}\n", sub.to_string(index=False))
 
-    # Walk-forward validate top 3 per symbol
+    # Walk-forward validate small top-K per symbol
+    n_folds = 2 if FAST_MODE else 4
+    TOP_K = 3 if FAST_MODE else 5
     wfv_rows = []
     for sym in symbols:
-        for _, row in out_f[out_f["symbol"] == sym].head(3).iterrows():
-            df_tf = load_df(symbol=sym, timeframe=row["tf"], period="1825d", limit=1500)
-            df_tf = to_mbtc(df_tf)
+        sub = out_f[
+            (out_f["symbol"] == sym) & (out_f["OOS_Sharpe"] >= MIN_OOS_SHARPE)
+        ].head(TOP_K)
+        for _, row in sub.iterrows():
+            df_tf = get_df(symbol=sym, timeframe=row["tf"])
             params = dict(
                 macd_fast=int(row["macd"].split("/")[0]),
                 macd_slow=int(row["macd"].split("/")[1]),
@@ -372,7 +411,7 @@ def main():
                 target_vol=float(row["tgt_vol"]),
             )
             avg_oos, oos_tr = walk_forward_scores(
-                df_tf, params, n_folds=4, commission=0.0012
+                df_tf, params, n_folds=n_folds, commission=0.0012
             )
             wfv_rows.append(
                 {
