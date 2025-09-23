@@ -1,15 +1,14 @@
 import numpy as np
+import warnings
+from contextlib import contextmanager
 import pandas as pd
 import ccxt
 import yfinance as yf
 from backtesting import Backtest, Strategy
 
-# Choose your indicator lib
-USE_TALIB = False
-if USE_TALIB:
-    import talib
-else:
-    import pandas_ta as ta
+# Use TA-Lib exclusively
+USE_TALIB = True
+import talib
 
 
 def _parse_period_days(period: str | int | None) -> int:
@@ -41,7 +40,9 @@ def load_df(symbol="BTC-USD", timeframe="1h", period="1825d", limit=1000):
     try:
         ex = ccxt.coinbaseadvanced({"enableRateLimit": True, "timeout": 90000})
         raw = ex.fetch_ohlcv(symbol.replace("-", "/"), timeframe="1h", limit=limit)
-        df = pd.DataFrame(raw, columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+        df = pd.DataFrame(
+            raw, columns=["Date", "Open", "High", "Low", "Close", "Volume"]
+        )
         df["Date"] = pd.to_datetime(df["Date"], unit="ms", utc=True)
         df.set_index("Date", inplace=True)
         df = df.astype(float)
@@ -77,6 +78,21 @@ def to_mbtc(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+@contextmanager
+def suppress_sortino_runtimewarnings():
+    """Suppress 'divide by zero' RuntimeWarnings from backtesting Sortino calc.
+    Keeps output clean when there are no negative day returns.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=RuntimeWarning,
+            message=r"divide by zero encountered in scalar divide",
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            yield
+
+
 class Strat(Strategy):
     macd_fast = 12
     macd_slow = 26
@@ -92,31 +108,25 @@ class Strat(Strategy):
         price_series = pd.Series(self.data.Close).astype(float)
         high_series = pd.Series(self.data.High).astype(float)
         low_series = pd.Series(self.data.Low).astype(float)
-        if USE_TALIB:
-            macd, macdsig, macdh = talib.MACD(
-                price_series.values,
-                fastperiod=self.macd_fast,
-                slowperiod=self.macd_slow,
-                signalperiod=self.macd_signal,
-            )
-            self.macd_hist = self.I(lambda: macdh, name="macd_hist")
-            adx = talib.ADX(
-                high_series.values,
-                low_series.values,
-                price_series.values,
-                timeperiod=self.adx_len,
-            )
-            self.adx = self.I(lambda: adx, name="adx")
-        else:
-            mdf = ta.macd(price_series, fast=self.macd_fast, slow=self.macd_slow, signal=self.macd_signal)
-            macd_hist_col = f"MACDh_{self.macd_fast}_{self.macd_slow}_{self.macd_signal}"
-            self.macd_hist = self.I(lambda: mdf[macd_hist_col].values, name="macd_hist")
-            adf = ta.adx(high_series, low_series, price_series, length=self.adx_len)
-            adx_col = f"ADX_{self.adx_len}"
-            self.adx = self.I(lambda: adf[adx_col].values, name="adx")
+        macd, macdsig, macdh = talib.MACD(
+            price_series.values,
+            fastperiod=self.macd_fast,
+            slowperiod=self.macd_slow,
+            signalperiod=self.macd_signal,
+        )
+        self.macd_hist = self.I(lambda: macdh, name="macd_hist")
+        adx = talib.ADX(
+            high_series.values,
+            low_series.values,
+            price_series.values,
+            timeperiod=self.adx_len,
+        )
+        self.adx = self.I(lambda: adx, name="adx")
 
         rets = price_series.pct_change().fillna(0.0)
-        self.realized_vol = self.I(lambda: rets.rolling(self.vol_lb).std().values, name="realized_vol")
+        self.realized_vol = self.I(
+            lambda: rets.rolling(self.vol_lb).std().values, name="realized_vol"
+        )
 
     def position_size_scale(self):
         vol = self.realized_vol[-1]
@@ -127,7 +137,11 @@ class Strat(Strategy):
     def next(self):
         if len(self.macd_hist) < 2:
             return
-        if np.isnan(self.adx[-1]) or np.isnan(self.macd_hist[-1]) or np.isnan(self.macd_hist[-2]):
+        if (
+            np.isnan(self.adx[-1])
+            or np.isnan(self.macd_hist[-1])
+            or np.isnan(self.macd_hist[-2])
+        ):
             return
         if self.adx[-1] <= self.adx_threshold:
             return
@@ -154,8 +168,16 @@ class Strat(Strategy):
 def run_backtest(symbol="BTC-USD", timeframe="1h", commission=0.0012):
     df = load_df(symbol=symbol, timeframe=timeframe, period="1825d", limit=1500)
     df = to_mbtc(df)
-    bt = Backtest(df, Strat, cash=10_000, commission=commission, trade_on_close=True, exclusive_orders=True)
-    stats = bt.run()
+    bt = Backtest(
+        df,
+        Strat,
+        cash=10_000,
+        commission=commission,
+        trade_on_close=True,
+        exclusive_orders=True,
+    )
+    with suppress_sortino_runtimewarnings():
+        stats = bt.run()
     print(stats)
     return stats
 

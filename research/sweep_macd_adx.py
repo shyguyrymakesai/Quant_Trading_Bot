@@ -1,16 +1,16 @@
 import itertools
+import warnings
+from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 import ccxt
 import yfinance as yf
 from backtesting import Backtest, Strategy
+from pathlib import Path
 
-# choose indicator lib
-USE_TALIB = False
-if USE_TALIB:
-    import talib
-else:
-    import pandas_ta as ta
+# Use TA-Lib exclusively
+USE_TALIB = True
+import talib
 
 
 def _parse_period_days(period: str | int | None) -> int:
@@ -21,6 +21,21 @@ def _parse_period_days(period: str | int | None) -> int:
         if num.isdigit():
             return int(num)
     return 730
+
+
+@contextmanager
+def suppress_sortino_runtimewarnings():
+    """Suppress 'divide by zero' RuntimeWarnings from backtesting Sortino calc.
+    Keeps output clean when there are no negative day returns.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=RuntimeWarning,
+            message=r"divide by zero encountered in scalar divide",
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            yield
 
 
 def _download_yf_hourly(symbol: str, total_days: int) -> pd.DataFrame:
@@ -47,7 +62,9 @@ def load_df(symbol="BTC-USD", timeframe="1h", period="1825d", limit=1000):
     try:
         ex = ccxt.coinbaseadvanced({"enableRateLimit": True, "timeout": 90000})
         raw = ex.fetch_ohlcv(symbol.replace("-", "/"), timeframe="1h", limit=limit)
-        df = pd.DataFrame(raw, columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+        df = pd.DataFrame(
+            raw, columns=["Date", "Open", "High", "Low", "Close", "Volume"]
+        )
         df["Date"] = pd.to_datetime(df["Date"], unit="ms", utc=True)
         df.set_index("Date", inplace=True)
         df = df.astype(float)
@@ -98,31 +115,25 @@ class Strat(Strategy):
         price_series = pd.Series(self.data.Close).astype(float)
         high_series = pd.Series(self.data.High).astype(float)
         low_series = pd.Series(self.data.Low).astype(float)
-        if USE_TALIB:
-            macd, macdsig, macdh = talib.MACD(
-                price_series.values,
-                fastperiod=self.macd_fast,
-                slowperiod=self.macd_slow,
-                signalperiod=self.macd_signal,
-            )
-            self.macd_hist = self.I(lambda: macdh, name="macd_hist")
-            adx = talib.ADX(
-                high_series.values,
-                low_series.values,
-                price_series.values,
-                timeperiod=self.adx_len,
-            )
-            self.adx = self.I(lambda: adx, name="adx")
-        else:
-            mdf = ta.macd(price_series, fast=self.macd_fast, slow=self.macd_slow, signal=self.macd_signal)
-            macd_hist_col = f"MACDh_{self.macd_fast}_{self.macd_slow}_{self.macd_signal}"
-            self.macd_hist = self.I(lambda: mdf[macd_hist_col].values, name="macd_hist")
-            adf = ta.adx(high_series, low_series, price_series, length=self.adx_len)
-            adx_col = f"ADX_{self.adx_len}"
-            self.adx = self.I(lambda: adf[adx_col].values, name="adx")
+        macd, macdsig, macdh = talib.MACD(
+            price_series.values,
+            fastperiod=self.macd_fast,
+            slowperiod=self.macd_slow,
+            signalperiod=self.macd_signal,
+        )
+        self.macd_hist = self.I(lambda: macdh, name="macd_hist")
+        adx = talib.ADX(
+            high_series.values,
+            low_series.values,
+            price_series.values,
+            timeperiod=self.adx_len,
+        )
+        self.adx = self.I(lambda: adx, name="adx")
 
         rets = price_series.pct_change().fillna(0.0)
-        self.realized_vol = self.I(lambda: rets.rolling(self.vol_lb).std().values, name="realized_vol")
+        self.realized_vol = self.I(
+            lambda: rets.rolling(self.vol_lb).std().values, name="realized_vol"
+        )
 
     def position_size_scale(self):
         vol = self.realized_vol[-1]
@@ -131,18 +142,24 @@ class Strat(Strategy):
         return float(np.clip(self.target_vol / vol, self.size_min, self.size_max))
 
     def next(self):
+        # guard early NaNs
         if len(self.macd_hist) < 2:
             return
-        if np.isnan(self.adx[-1]) or np.isnan(self.macd_hist[-1]) or np.isnan(self.macd_hist[-2]):
+        if np.isnan(self.macd_hist[-1]) or np.isnan(self.macd_hist[-2]):
             return
-        if self.adx[-1] <= self.adx_threshold:
-            return
+        # Only enforce ADX if threshold > 0
+        if self.adx_threshold > 0:
+            if np.isnan(self.adx[-1]) or self.adx[-1] <= self.adx_threshold:
+                return
+
         crossed_up = self.macd_hist[-1] > 0 and self.macd_hist[-2] <= 0
         crossed_down = self.macd_hist[-1] < 0 and self.macd_hist[-2] >= 0
+
         vol_scale = self.position_size_scale()
         if vol_scale <= 0:
             return
-        # trade integer μBTC units (size=1 = 0.001 BTC)
+
+        # integer μBTC units (backtesting only)
         risk_frac = 0.10
         price = float(self.data.Close[-1])
         equity = float(self.equity)
@@ -150,6 +167,7 @@ class Strat(Strategy):
         units = int(np.floor(target_notional / max(price, 1e-9)))
         if units < 1:
             units = 1
+
         if crossed_up:
             self.position.close()
             self.buy(size=units)
@@ -161,10 +179,26 @@ class Strat(Strategy):
 def run_split_backtest(df, params, commission=0.0012):
     k = int(len(df) * 0.7)
     df_is, df_oos = df.iloc[:k], df.iloc[k:]
-    bt_is = Backtest(df_is, Strat, cash=10_000, commission=commission, trade_on_close=True, exclusive_orders=True)
-    bt_oos = Backtest(df_oos, Strat, cash=10_000, commission=commission, trade_on_close=True, exclusive_orders=True)
-    s_is = bt_is.run(**params)
-    s_oos = bt_oos.run(**params)
+    bt_is = Backtest(
+        df_is,
+        Strat,
+        cash=10_000,
+        commission=commission,
+        trade_on_close=True,
+        exclusive_orders=True,
+    )
+    bt_oos = Backtest(
+        df_oos,
+        Strat,
+        cash=10_000,
+        commission=commission,
+        trade_on_close=True,
+        exclusive_orders=True,
+    )
+    with suppress_sortino_runtimewarnings():
+        s_is = bt_is.run(**params)
+    with suppress_sortino_runtimewarnings():
+        s_oos = bt_oos.run(**params)
     return s_is, s_oos
 
 
@@ -178,11 +212,33 @@ def walk_forward_scores(df, params, n_folds=4, commission=0.0012):
         df_is, df_oos = df.iloc[:cp], df.iloc[cp : cp + oos_len]
         if len(df_is) < 10 or len(df_oos) < 10:
             continue
-        bt_is = Backtest(df_is, Strat, cash=10_000, commission=commission, trade_on_close=True, exclusive_orders=True)
-        bt_oos = Backtest(df_oos, Strat, cash=10_000, commission=commission, trade_on_close=True, exclusive_orders=True)
-        s_is = bt_is.run(**params)
-        s_oos = bt_oos.run(**params)
-        scores.append((float(s_is["Sharpe Ratio"]), float(s_oos["Sharpe Ratio"]), int(s_oos["# Trades"])))
+        bt_is = Backtest(
+            df_is,
+            Strat,
+            cash=10_000,
+            commission=commission,
+            trade_on_close=True,
+            exclusive_orders=True,
+        )
+        bt_oos = Backtest(
+            df_oos,
+            Strat,
+            cash=10_000,
+            commission=commission,
+            trade_on_close=True,
+            exclusive_orders=True,
+        )
+        with suppress_sortino_runtimewarnings():
+            s_is = bt_is.run(**params)
+        with suppress_sortino_runtimewarnings():
+            s_oos = bt_oos.run(**params)
+        scores.append(
+            (
+                float(s_is["Sharpe Ratio"]),
+                float(s_oos["Sharpe Ratio"]),
+                int(s_oos["# Trades"]),
+            )
+        )
     if not scores:
         return float("nan"), 0
     avg_oos_sharpe = float(np.mean([x[1] for x in scores]))
@@ -193,12 +249,14 @@ def walk_forward_scores(df, params, n_folds=4, commission=0.0012):
 def main():
     grids = {
         "timeframe": ["1h", "4h"],
-        "macd_fast": [8, 12],
-        "macd_slow": [24, 26],
-        "macd_signal": [9],
-        "adx_threshold": [20, 25, 30],
-        "vol_lb": [20, 30],
-        "target_vol": [0.015, 0.02],
+        "macd_fast": [5, 6, 8, 10, 12],
+        "macd_slow": [19, 24, 26, 30, 35],
+        "macd_signal": [5, 9, 10],
+        # ADX==0 means "no ADX filter" → handled in next() below
+        "adx_threshold": [0, 5, 10, 15, 20, 25],
+        "vol_lb": [10, 20, 30, 40],
+        # try higher target vol so positions actually size up and produce more fills
+        "target_vol": [0.02, 0.03, 0.05, 0.10],
     }
     combos = list(
         itertools.product(
@@ -212,14 +270,16 @@ def main():
         )
     )
 
-    symbols = ["BTC-USD", "ETH-USD", "SOL-USD"]
+    symbols = ["BTC-USD", "ETH-USD", "SOL-USD", "LTC-USD", "ADA-USD"]
     rows = []
 
     for sym in symbols:
         df_cache = {}
-        for (tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol) in combos:
+        for tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol in combos:
             if tf not in df_cache:
-                df_cache[tf] = load_df(symbol=sym, timeframe=tf, period="1825d", limit=1500)
+                df_cache[tf] = load_df(
+                    symbol=sym, timeframe=tf, period="1825d", limit=1500
+                )
                 df_cache[tf] = to_mbtc(df_cache[tf])  # integer units for backtesting
             df = df_cache[tf]
 
@@ -265,13 +325,30 @@ def main():
     out = pd.DataFrame(rows)
 
     # Minimum trades filter to avoid spurious Sharpe from tiny samples
-    MIN_TRADES = 20
-    out_f = out[(out["OOS_Trades"] >= MIN_TRADES) & (out["IS_Trades"] >= MIN_TRADES)].copy()
+    MIN_TRADES = 30  # require >=30 IS and OOS trades
+    out_f = out[
+        (out["OOS_Trades"] >= MIN_TRADES) & (out["IS_Trades"] >= MIN_TRADES)
+    ].copy()
+    if out_f.empty:
+        # If empty on first pass, temporarily lower to 20 to inspect the frontier
+        MIN_TRADES = 20
+        out_f = out[
+            (out["OOS_Trades"] >= MIN_TRADES) & (out["IS_Trades"] >= MIN_TRADES)
+        ].copy()
     out_f = out_f.sort_values(["symbol", "OOS_Sharpe"], ascending=[True, False])
 
-    # Save full + filtered
-    out.to_csv("research/sweep_results_full.csv", index=False)
-    out_f.to_csv("research/sweep_results_filtered.csv", index=False)
+    # Save full + filtered next to this script
+    base = Path(__file__).resolve().parent
+    (
+        (base / "sweep_results_full.csv").write_text("")
+        if out.empty
+        else out.to_csv(base / "sweep_results_full.csv", index=False)
+    )
+    (
+        (base / "sweep_results_filtered.csv").write_text("")
+        if out_f.empty
+        else out_f.to_csv(base / "sweep_results_filtered.csv", index=False)
+    )
 
     # Print top 10 per symbol
     for sym in symbols:
@@ -294,7 +371,9 @@ def main():
                 vol_lb=int(row["vol_lb"]),
                 target_vol=float(row["tgt_vol"]),
             )
-            avg_oos, oos_tr = walk_forward_scores(df_tf, params, n_folds=4, commission=0.0012)
+            avg_oos, oos_tr = walk_forward_scores(
+                df_tf, params, n_folds=4, commission=0.0012
+            )
             wfv_rows.append(
                 {
                     "symbol": sym,
@@ -307,12 +386,26 @@ def main():
                     "WFV_OOS_Trades": oos_tr,
                 }
             )
-    wfv = pd.DataFrame(wfv_rows).sort_values(["symbol", "WFV_Avg_OOS_Sharpe"], ascending=[True, False])
-    wfv.to_csv("research/sweep_walkforward.csv", index=False)
-    if not wfv.empty:
-        print("\nWALK-FORWARD SUMMARY\n", wfv.to_string(index=False))
+    if wfv_rows:
+        wfv = pd.DataFrame(wfv_rows)
+        if all(c in wfv.columns for c in ["symbol", "WFV_Avg_OOS_Sharpe"]):
+            wfv = wfv.sort_values(
+                ["symbol", "WFV_Avg_OOS_Sharpe"], ascending=[True, False]
+            )
+        wfv.to_csv(
+            Path(__file__).resolve().parent / "sweep_walkforward.csv", index=False
+        )
+        if not wfv.empty:
+            print("\nWALK-FORWARD SUMMARY\n", wfv.to_string(index=False))
+        else:
+            print(
+                "\nWALK-FORWARD SUMMARY\nNo qualifying configurations for walk-forward validation."
+            )
     else:
-        print("\nWALK-FORWARD SUMMARY\nNo qualifying configurations for walk-forward validation.")
+        (Path(__file__).resolve().parent / "sweep_walkforward.csv").write_text("")
+        print(
+            "\nWALK-FORWARD SUMMARY\nNo qualifying configurations for walk-forward validation."
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ from backtesting.test import GOOG
 import pandas as pd
 import talib
 import numpy as np
+import warnings
+from contextlib import contextmanager
 
 # NOTE: Replace GOOG with real crypto candles loaded via pandas
 data = GOOG.copy()
@@ -61,6 +63,21 @@ class MACD_ADX_Strategy(Strategy):
             self.sell()
 
 
+@contextmanager
+def suppress_sortino_runtimewarnings():
+    """Suppress 'divide by zero' RuntimeWarnings from backtesting Sortino calc.
+    Keeps output clean when there are no negative returns in the sample.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=RuntimeWarning,
+            message=r"divide by zero encountered in scalar divide",
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            yield
+
+
 if __name__ == "__main__":
     print("Running MACD + ADX Strategy Backtest...")
     print(f"Data shape: {data.shape}")
@@ -69,7 +86,8 @@ if __name__ == "__main__":
     bt = Backtest(
         data, MACD_ADX_Strategy, cash=10000, commission=0.001, trade_on_close=True
     )
-    stats = bt.run()
+    with suppress_sortino_runtimewarnings():
+        stats = bt.run()
     print("\n" + "=" * 50)
     print("BACKTEST RESULTS")
     print("=" * 50)
