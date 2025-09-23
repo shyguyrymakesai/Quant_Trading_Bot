@@ -1,0 +1,39 @@
+# config/config.example.yaml
+mode: "paper"            # paper | live
+exchange: "binance"      # binance | coinbase
+symbol: "BTC/USDT"
+timeframe: "1h"
+base_currency: "USDT"
+
+# Fees & slippage (taker fees typical for spot)
+fees:
+  taker: 0.001           # 0.10%
+  slippage_bps: 2        # 2 bps assumed
+
+risk:
+  daily_loss_cap_pct: 0.01   # stop trading if -1% day PnL
+  max_position_notional: 25  # hard cap (USDT)
+
+strategy:
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+  adx:
+    length: 14
+    threshold: 25
+  vol_target:
+    lookback: 20          # realized vol window (bars)
+    target_vol: 0.02      # target daily vol (example)
+    min_size: 0.0
+    max_size: 1.0
+
+# API keys (use env vars in production)
+api_keys:
+  binance:
+    key: "YOUR_BINANCE_TESTNET_KEY"
+    secret: "YOUR_BINANCE_TESTNET_SECRET"
+  coinbase:
+    key: "YOUR_COINBASE_KEY"
+    secret: "YOUR_COINBASE_SECRET"
+    passphrase: "YOUR_PASSPHRASE"

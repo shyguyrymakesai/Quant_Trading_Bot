@@ -1,0 +1,253 @@
+# Crypto Trading Bot - .gitignore
+
+# =============================================================================
+# SECURITY & SECRETS - NEVER COMMIT THESE!
+# =============================================================================
+.env
+.env.local
+.env.*.local
+config/config.yaml
+config/*.yaml
+!config/config.example.yaml
+*.key
+*.pem
+secrets/
+credentials/
+
+# API Keys and sensitive config
+*api_key*
+*secret*
+*password*
+*token*
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# =============================================================================
+# TRADING & DATA
+# =============================================================================
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+db/
+database/
+data/historical/
+data/live/
+data/cache/
+
+# Trading logs and results
+logs/
+*.log
+trading_results/
+backtest_results/
+performance_reports/
+audit_trail/
+
+# Temporary trading data
+temp/
+tmp/
+cache/
+.cache/
+
+# Portfolio and position files
+portfolio.json
+positions.json
+trades.csv
+*.csv
+*.xlsx
+*.xls
+
+# =============================================================================
+# DEVELOPMENT & TOOLS
+# =============================================================================
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+desktop.ini
+
+# =============================================================================
+# DOCKER & DEPLOYMENT
+# =============================================================================
+# Docker
+.dockerignore
+docker-compose.override.yml
+.docker/
+
+# Deployment
+.aws/
+.azure/
+.gcp/
+terraform.tfstate*
+.terraform/
+
+# =============================================================================
+# MONITORING & ANALYTICS
+# =============================================================================
+# Monitoring data
+monitoring/
+metrics/
+alerts/
+grafana/
+prometheus/
+
+# =============================================================================
+# RESEARCH & BACKTESTING
+# =============================================================================
+# Research outputs
+research/output/
+research/plots/
+research/results/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+
+# Notebook outputs
+*.ipynb
+research/*.ipynb
+
+# Model files
+models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+
+# =============================================================================
+# MISC
+# =============================================================================
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Compressed files
+*.zip
+*.tar.gz
+*.rar
+
+# Local configuration
+local_config.*
+local_settings.*
+
+# Node modules (if any JS tools are used)
+node_modules/
+
+# Python package manager
+pip-wheel-metadata/
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Windows thumbnail cache files
+ehthumbs_vista.db
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
