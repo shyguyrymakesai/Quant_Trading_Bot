@@ -12,6 +12,6 @@ aiosqlite>=0.20.0
 python-dotenv>=1.0.1
 PyYAML>=6.0.1
 pydantic>=2.7.0
+pydantic-settings>=2.4.0
 httpx>=0.27.0
 loguru>=0.7.2
-TA-Lib>=0.4.24

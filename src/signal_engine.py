@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import talib
-from .config import settings
+from .config import settings, get_symbol_params
 
 
 def compute_indicators(ohlcv: list):
@@ -9,12 +9,18 @@ def compute_indicators(ohlcv: list):
     df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
     df.set_index("ts", inplace=True)
+    # Per-symbol overrides
+    sym_params = get_symbol_params(settings.symbol)
+    mf, ms, sig = sym_params.get(
+        "macd", [settings.macd_fast, settings.macd_slow, settings.macd_signal]
+    )
+    adx_len = settings.adx_len
     # TA-Lib MACD returns (macd, signal, hist)
     macd, macd_signal, macd_hist = talib.MACD(
         df["close"].values.astype(float),
-        fastperiod=settings.macd_fast,
-        slowperiod=settings.macd_slow,
-        signalperiod=settings.macd_signal,
+        fastperiod=int(mf),
+        slowperiod=int(ms),
+        signalperiod=int(sig),
     )
     df["MACD"] = macd
     df["MACD_signal"] = macd_signal
@@ -24,17 +30,20 @@ def compute_indicators(ohlcv: list):
         df["high"].values.astype(float),
         df["low"].values.astype(float),
         df["close"].values.astype(float),
-        timeperiod=settings.adx_len,
+        timeperiod=int(adx_len),
     )
     df["ADX"] = adx
     return df
 
 
 def volatility_target_size(df: pd.DataFrame):
+    sym_params = get_symbol_params(settings.symbol)
+    lb = int(sym_params.get("vol_lb", settings.vol_lookback))
+    tgt = float(sym_params.get("target_vol", settings.vol_target))
     returns = df["close"].pct_change()
-    vol = returns.rolling(settings.vol_lookback).std()
+    vol = returns.rolling(lb).std()
     # simple inverse-vol scaling toward a target
-    scale = (settings.vol_target / (vol.replace(0, np.nan))).clip(
+    scale = (tgt / (vol.replace(0, np.nan))).clip(
         lower=settings.min_size, upper=settings.max_size
     )
     return scale.fillna(0.0)
@@ -43,7 +52,9 @@ def volatility_target_size(df: pd.DataFrame):
 def last_signal(df: pd.DataFrame):
     row = df.iloc[-1]
     prev = df.iloc[-2]
-    adx_ok = row.get("ADX", 0) > settings.adx_threshold
+    sym_params = get_symbol_params(settings.symbol)
+    adx_thr = int(sym_params.get("adx_threshold", settings.adx_threshold))
+    adx_ok = row.get("ADX", 0) > adx_thr
     # MACD histogram cross as signal (TA-Lib column)
     macd_hist = row.get("MACD_hist")
     macd_hist_prev = prev.get("MACD_hist")
@@ -53,3 +64,13 @@ def last_signal(df: pd.DataFrame):
         if macd_hist < 0 and macd_hist_prev >= 0:
             return "sell"
     return "hold"
+
+
+def compute_realized_vol(df: pd.DataFrame):
+    sym_params = get_symbol_params(settings.symbol)
+    lb = int(sym_params.get("vol_lb", settings.vol_lookback))
+    returns = df["close"].pct_change()
+    vol = returns.rolling(lb).std()
+    if len(vol.dropna()) == 0:
+        return 0.0
+    return float(vol.iloc[-1])
