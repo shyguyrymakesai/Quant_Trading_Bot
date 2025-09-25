@@ -194,6 +194,10 @@ research/results/
 *.svg
 *.pdf
 
+# --- Allow README plots to be committed ---
+!research/reports/plots/
+!research/reports/plots/*.png
+
 # Notebook outputs
 *.ipynb
 research/*.ipynb
