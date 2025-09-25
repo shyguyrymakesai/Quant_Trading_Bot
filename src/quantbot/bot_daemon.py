@@ -18,7 +18,8 @@ from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
 from quantbot.broker import BrokerError, BrokerFactory
-from quantbot.config import settings, Settings, get_symbol_params
+import argparse
+from quantbot.config import settings, Settings, get_symbol_params, load_config_file
 from quantbot.state import StateStore
 from quantbot.strategy_macd import (
     Signal,
@@ -604,7 +605,15 @@ class BotDaemon:
 
 
 async def main() -> None:
-    bot = BotDaemon(settings)
+    parser = argparse.ArgumentParser(description="Run trading bot daemon")
+    parser.add_argument(
+        "--config", dest="config_path", help="Path to YAML run config", default=None
+    )
+    args, _ = parser.parse_known_args()
+    cfg = settings
+    if args.config_path:
+        cfg = load_config_file(args.config_path)
+    bot = BotDaemon(cfg)
     await bot.start()
 
 

@@ -1,0 +1,57 @@
+{
+  "account": {
+    "cash": 100000.0,
+    "equity": 100000.0,
+    "start_cash": 100000.0,
+    "updated": "2025-09-25T18:39:26.486155+00:00"
+  },
+  "cycles": [
+    {
+      "candle": "2025-09-25T18:39:00+00:00",
+      "payload": {
+        "cooldown_bars": 2,
+        "equity": 100000.0,
+        "maker_offset": 0.00015,
+        "order": null,
+        "order_plan": null,
+        "parity_ok": false,
+        "price": 3878.25,
+        "reason": "adx_below_threshold",
+        "signal": "HOLD",
+        "signal_meta": {
+          "adx_ok": false,
+          "cooldown_active": false,
+          "cooldown_bars": 2,
+          "cross_down": false,
+          "cross_up": false,
+          "vol_ok": true
+        },
+        "target_fraction": 0.08579465803822511,
+        "volatility": 0.04662294939409669,
+        "volatility_scale": 0.42897329019112557
+      },
+      "recorded": "2025-09-25T18:39:26.502392+00:00",
+      "symbol": "ETH/USD"
+    }
+  ],
+  "last_actions": {},
+  "last_processed": {
+    "ETH/USD": "2025-09-25T18:39:00+00:00"
+  },
+  "market_prices": {
+    "ETH/USD": {
+      "price": 3878.25,
+      "updated": "2025-09-25T18:39:26.416618+00:00"
+    }
+  },
+  "order_history": [],
+  "orders": {},
+  "positions": {},
+  "run_lock": {
+    "ETH/USD": {
+      "candle": "2025-09-25T18:39:00+00:00",
+      "status": "done",
+      "ts": "2025-09-25T18:39:26.521902+00:00"
+    }
+  }
+}

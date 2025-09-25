@@ -166,19 +166,17 @@ def _project_root() -> Path:
     or a `config` directory. Fallback to the package parent.
     """
     here = Path(__file__).resolve()
-    # Consider up to 4 levels up to be safe across layouts
     for p in [
-        here.parent,  # .../src/quantbot
-        here.parent.parent,  # .../src
-        here.parent.parent.parent,  # .../project root
-        here.parent.parent.parent.parent,  # .../workspace root (just in case)
+        here.parent,
+        here.parent.parent,
+        here.parent.parent.parent,
+        here.parent.parent.parent.parent,
     ]:
         try:
             if (p / "config" / "config.yaml").exists() or (p / "config").exists():
                 return p
         except Exception:
             continue
-    # Fallback to the package's parent (previous behavior)
     return here.parent.parent
 
 
@@ -192,119 +190,6 @@ def load_yaml_settings(path: str | None = None) -> Dict[str, Any]:
 
 
 yaml_cfg = load_yaml_settings()
-
-
-def _apply_run_config(run_cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Map a run-specific YAML like ethusdt_1h_v01.yaml into our Settings shape.
-    Expected keys: pair, timeframe, fees, signals, sizing, risk, paper, logging.
-    """
-    if not run_cfg:
-        return {}
-    out: Dict[str, Any] = {}
-
-    # symbol/timeframe
-    def _parse_pair(p: str, prefer_usd: bool = False) -> tuple[str, str] | None:
-        if not p:
-            return None
-        p = p.strip().upper()
-        # Normalize common separators
-        if "/" in p:
-            parts = p.replace("-", "/").replace("_", "/").split("/")
-            if len(parts) == 2:
-                return parts[0], parts[1]
-        # Known quote currencies, longest first
-        known_quotes = ["USDT", "USDC", "USD", "BTC", "ETH", "BNB", "EUR", "GBP"]
-        for q in known_quotes:
-            if p.endswith(q):
-                return p[: -len(q)], q
-        # Fallback: if prefer USD, assume USD quote
-        if prefer_usd and len(p) > 3:
-            return p, "USD"
-        return None
-
-    pair = str(run_cfg.get("pair", "")).strip()
-    prefer_usd = False
-    ex_hint = (run_cfg.get("paper", {}) or {}).get("exchange") or run_cfg.get(
-        "exchange"
-    )
-    if ex_hint and str(ex_hint).lower().startswith("coinbase"):
-        prefer_usd = True
-    if pair:
-        parsed = _parse_pair(pair, prefer_usd=prefer_usd)
-        if parsed:
-            base, quote = parsed
-            out["symbol"] = f"{base}/{quote}"
-            out["quote_currency"] = quote
-        else:
-            out["symbol"] = pair
-    if "timeframe" in run_cfg:
-        out["timeframe"] = str(run_cfg.get("timeframe"))
-    # fees
-    fees = run_cfg.get("fees", {}) or {}
-    if isinstance(fees, dict):
-        taker_bps = fees.get("taker_bps")
-        maker_bps = fees.get("maker_bps")
-        if taker_bps is not None:
-            out["commission"] = float(taker_bps) / 10_000.0
-        if maker_bps is not None:
-            out["maker_offset_bps"] = float(maker_bps)
-    # signals
-    sig = run_cfg.get("signals", {}) or {}
-    if isinstance(sig, dict):
-        macd = sig.get("macd", {}) or {}
-        if isinstance(macd, dict):
-            out["macd_fast"] = int(macd.get("fast", 8))
-            out["macd_slow"] = int(macd.get("slow", 24))
-            out["macd_signal"] = int(macd.get("signal", 9))
-        if "adx_threshold" in sig:
-            out["adx_threshold"] = float(sig.get("adx_threshold"))
-        if "cooldown_bars_after_exit" in sig:
-            out["cooldown_bars"] = int(sig.get("cooldown_bars_after_exit"))
-    # sizing
-    sizing = run_cfg.get("sizing", {}) or {}
-    if isinstance(sizing, dict):
-        if "target_vol" in sizing:
-            out["vol_target"] = float(sizing.get("target_vol"))
-        if "vol_lookback" in sizing:
-            out["vol_lookback"] = int(sizing.get("vol_lookback"))
-        if "max_position" in sizing:
-            out["max_size"] = float(sizing.get("max_position"))
-    # risk
-    risk = run_cfg.get("risk", {}) or {}
-    if isinstance(risk, dict):
-        # map to existing risk fields (used by bot)
-        if "max_intraday_loss_pct" in risk:
-            out["daily_loss_limit"] = (
-                -abs(float(risk.get("max_intraday_loss_pct"))) / 100.0
-            )
-        if "max_drawdown_pct" in risk:
-            # no direct field; keep for future risk manager
-            out.setdefault("_notes", {})
-            out["_notes"]["max_drawdown_pct"] = float(risk.get("max_drawdown_pct"))
-        if "kill_switch" in risk:
-            out.setdefault("_flags", {})
-            out["_flags"]["kill_switch"] = bool(risk.get("kill_switch"))
-    # paper/live
-    # explicit top-level exchange
-    if run_cfg.get("exchange"):
-        out["exchange"] = str(run_cfg.get("exchange"))
-        # Keep data provider aligned with chosen exchange unless explicitly overridden
-        out.setdefault("data_provider", out["exchange"])
-    paper = run_cfg.get("paper", {}) or {}
-    if isinstance(paper, dict):
-        if paper.get("exchange"):
-            out["exchange"] = str(paper.get("exchange"))
-            # In paper mode we still fetch data from the same venue unless specified
-            out["data_provider"] = out["exchange"]
-        if bool(paper.get("maker_bias", False)):
-            out["entry_order_type"] = "limit_post_only"
-            out["exit_order_type"] = "market"
-    # logging
-    logging_cfg = run_cfg.get("logging", {}) or {}
-    if isinstance(logging_cfg, dict):
-        if logging_cfg.get("level"):
-            out["log_level"] = str(logging_cfg.get("level"))
-    return out
 
 
 def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -409,20 +294,6 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 settings = Settings(**_flatten_yaml(yaml_cfg))
-
-
-def load_config_file(path: str) -> Settings:
-    """Load a run-specific YAML file and apply it onto current settings.
-    Returns a new Settings instance and updates the module-level settings.
-    """
-    run_cfg = load_yaml_settings(path)
-    # If the file is in the simplified run schema, map it; otherwise assume full config.yaml shape.
-    mapped = _apply_run_config(run_cfg)
-    base = _flatten_yaml(yaml_cfg) if not mapped else _flatten_yaml(yaml_cfg) | mapped
-    new = Settings(**base)
-    global settings  # type: ignore
-    settings = new
-    return new
 
 
 def _normalize_symbol_key(symbol: str) -> str:
