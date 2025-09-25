@@ -1,5 +1,16 @@
 # Crypto Momentum Bot (MACD + ADX + Volatility Targeting)
 
+This repository implements a fully automated crypto momentum bot that combines MACD, ADX gating, and volatility targeting.
+It includes both research tooling (parameter sweeps, backtests, walk-forward validation) and an ops-ready paper trading daemon with Docker packaging.
+
+The project demonstrates the end-to-end workflow of modern quant research:
+- Alpha discovery and parameter sweeps
+- Risk sizing via Moreira–Muir volatility targeting
+- Walk-forward validation and research plots
+- Deployment to a production-style daemon with idempotency, state persistence, and ops safety
+
+---
+
 A 30-minute MACD+ADX momentum daemon with volatility targeting and idempotent
 execution. The scheduler fires on :00/:30 in `America/Indiana/Indianapolis`,
 pulls fresh OHLCV, validates parity against the research engine, sizes risk via
@@ -186,6 +197,28 @@ Paper-trade CSV logging:
 
 ---
 
+## 7. Results Snapshot
+
+Walk-forward validation on ETH-USDT (1h bars) with vol targeting:
+
+| Metric | Value |
+| --- | --- |
+| Avg OOS Gross Sharpe | ~0.91 |
+| Avg OOS Net Sharpe | ~0.66 |
+| OOS Max Drawdown | -1.43% |
+| Fees as % of Gross PnL | ~24% |
+| OOS Exposure | 27% |
+| OOS Hit Rate | 39% |
+| Avg Holding Time | ~15h |
+
+Plots:
+
+![Sharpe](research/reports/plots/wfv_sharpe.png)
+![Fees](research/reports/plots/wfv_fees_pct_gross.png)
+![Max Drawdown](research/reports/plots/wfv_maxdd.png)
+
+---
+
 ### File map (new additions)
 
 - `src/bot_daemon.py` — daemon entrypoint.
@@ -196,3 +229,15 @@ Paper-trade CSV logging:
 - `.env.example` — starter configuration and env-var overrides.
 
 For detailed code structure see inline docstrings and comments.
+
+---
+
+## 9. Why this project matters
+
+This bot is more than a trading experiment — it demonstrates quant + engineering discipline:
+
+- Translating quant research (walk-forward validation, vol targeting, fee impact) into an operational system
+- Handling real-world engineering concerns: idempotency, state persistence, config management, ops safety
+- Building with production discipline: containerization, environment separation, reproducible research workflows
+
+It serves as both a quant research lab and an ops-ready trading stack.

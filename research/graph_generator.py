@@ -1,11 +1,8 @@
-import argparse
-import os
+import argparse, os
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
 
 SUMMARY_COLS = [
     "symbol",
@@ -15,162 +12,160 @@ SUMMARY_COLS = [
     "WFV_OOS_Gross_Sharpe_Std",
     "WFV_OOS_Net_Sharpe_Std",
     "WFV_OOS_MaxDD",
-    "WFV_OOS_Trades",
-    "WFV_OOS_TradesPerMonth",
-    "WFV_OOS_Turnover",
     "WFV_OOS_FeesPctGrossPnL",
-    "WFV_OOS_Exposure",
-    "WFV_OOS_HitRate",
-    "WFV_OOS_AvgHold",
 ]
 
 
-def _maybe_percent(series: pd.Series) -> pd.Series:
-    s = pd.to_numeric(series, errors="coerce")
-    if s.max(skipna=True) is not None and s.max(skipna=True) <= 1.0:
+def _maybe_percent(s: pd.Series) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce")
+    if pd.notna(s).any() and s.abs().max(skipna=True) <= 1.0:
         return s * 100.0
     return s
 
 
-def _label(df: pd.DataFrame) -> pd.Series:
-    # Combine symbol/tf for x-axis labels
-    sym = df["symbol"].astype(str).str.replace("USDT", "", regex=False)
-    return (sym + " " + df["tf"].astype(str)).values
+def _labels(df: pd.DataFrame):
+    return list(
+        df["symbol"].astype(str).str.replace("USDT", "", regex=False)
+        + " "
+        + df["tf"].astype(str)
+    )
 
 
-def plot_from_summary(csv_path: str, outdir: str = "research/reports/plots"):
-    if not os.path.isabs(csv_path):
-        # Resolve relative to CWD; if missing, also try relative to this script
-        if not os.path.exists(csv_path):
-            alt = Path(__file__).resolve().parent / "reports" / Path(csv_path).name
-            if alt.exists():
-                csv_path = str(alt)
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"CSV not found at: {csv_path}")
-    df = pd.read_csv(csv_path)
+def plot_summary(summary_csv: str, outdir: str, equity_csv: str | None):
+    # resolve path
+    if not os.path.isabs(summary_csv) and not os.path.exists(summary_csv):
+        alt = Path(__file__).resolve().parent / "reports" / Path(summary_csv).name
+        if alt.exists():
+            summary_csv = str(alt)
+    if not os.path.exists(summary_csv):
+        raise FileNotFoundError(f"CSV not found: {summary_csv}")
+
+    df = pd.read_csv(summary_csv)
     missing = [c for c in SUMMARY_COLS if c not in df.columns]
     if missing:
         raise ValueError(f"CSV missing columns: {missing}")
 
-    os.makedirs(outdir, exist_ok=True)
-    labels = _label(df)
-
-    # 1) Sharpe (Gross vs Net) with std error bars
+    out = Path(outdir)
+    out.mkdir(parents=True, exist_ok=True)
+    labels = _labels(df)
     x = np.arange(len(df))
-    width = 0.35
 
-    fig, ax = plt.subplots(figsize=(9, 5))
-    ax.bar(
-        x - width / 2,
-        df["WFV_Avg_OOS_Gross_Sharpe"],
-        width,
-        label="Gross",
-        yerr=pd.to_numeric(df["WFV_OOS_Gross_Sharpe_Std"], errors="coerce"),
-        capsize=4,
-        color="#4C78A8",
+    # 1) Sharpe (Gross vs Net) with error bars
+    width = 0.35
+    gross = pd.to_numeric(df["WFV_Avg_OOS_Gross_Sharpe"], errors="coerce")
+    net = pd.to_numeric(df["WFV_Avg_OOS_Net_Sharpe"], errors="coerce")
+    gstd = (
+        pd.to_numeric(df["WFV_OOS_Gross_Sharpe_Std"], errors="coerce")
+        .fillna(0)
+        .clip(lower=0)
     )
-    ax.bar(
-        x + width / 2,
-        df["WFV_Avg_OOS_Net_Sharpe"],
-        width,
-        label="Net",
-        yerr=pd.to_numeric(df["WFV_OOS_Net_Sharpe_Std"], errors="coerce"),
-        capsize=4,
-        color="#F58518",
+    nstd = (
+        pd.to_numeric(df["WFV_OOS_Net_Sharpe_Std"], errors="coerce")
+        .fillna(0)
+        .clip(lower=0)
     )
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.bar(x - width / 2, gross, width, label="Gross", yerr=gstd, capsize=4)
+    ax.bar(x + width / 2, net, width, label="Net", yerr=nstd, capsize=4)
+    ax.axhline(0, color="black", lw=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
     ax.set_title("WFV OOS Sharpe (Gross vs Net)")
-    ax.set_xticks(x, labels, rotation=0)
-    ax.axhline(0, color="black", linewidth=0.8)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(Path(outdir) / "wfv_sharpe.png", dpi=150)
+    fig.savefig(out / "wfv_sharpe.png", dpi=150)
 
-    # 2) Max Drawdown (%)
+    # 2) Max Drawdown (%)  — use a dot + annotation (cleaner for single point)
     dd = _maybe_percent(df["WFV_OOS_MaxDD"])
-    fig, ax = plt.subplots(figsize=(9, 3.5))
-    ax.bar(labels, dd, color="#E45756")
-    ax.set_title("WFV OOS Max Drawdown (%)")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    y = float(dd.iloc[0])
+    ax.plot([0], [y], marker="o", markersize=10)
+    ax.hlines(0, -0.5, 0.5, linewidth=0.8, color="black")
+    ax.set_xlim(-0.5, 0.5)
+    pad = max(0.5, abs(y) * 0.4)  # headroom
+    ax.set_ylim(y - pad, max(0.5, 0) + pad * 0.2)
+    ax.set_xticks([0])
+    ax.set_xticklabels([labels[0]])
     ax.set_ylabel("%")
-    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_title("WFV OOS Max Drawdown (%)")
+    ax.grid(axis="y", alpha=0.3)
+    ax.annotate(
+        f"{y:.2f}%",
+        (0, y),
+        textcoords="offset points",
+        xytext=(0, -12),
+        ha="center",
+        va="top",
+    )
     fig.tight_layout()
     fig.savefig(Path(outdir) / "wfv_maxdd.png", dpi=150)
 
-    # 3) Trades per month and Turnover
-    fig, ax1 = plt.subplots(figsize=(9, 4.5))
-    ax1.bar(
-        labels,
-        pd.to_numeric(df["WFV_OOS_TradesPerMonth"], errors="coerce"),
-        color="#72B7B2",
-    )
-    ax1.set_ylabel("Trades / Month", color="#225B54")
-    ax1.set_title("WFV OOS Trades/Month and Turnover")
-    ax1.tick_params(axis="y", labelcolor="#225B54")
-
-    ax2 = ax1.twinx()
-    ax2.plot(
-        labels,
-        pd.to_numeric(df["WFV_OOS_Turnover"], errors="coerce"),
-        color="#FF9DA6",
-        marker="o",
-    )
-    ax2.set_ylabel("Turnover (× equity)", color="#8B1E3F")
-    ax2.tick_params(axis="y", labelcolor="#8B1E3F")
-    fig.tight_layout()
-    fig.savefig(Path(outdir) / "wfv_trades_turnover.png", dpi=150)
-
-    # 4) Fees as % of Gross PnL
+    # 3) Fees as % of Gross PnL — also dot + annotation
     fees_pct = _maybe_percent(df["WFV_OOS_FeesPctGrossPnL"])
-    fig, ax = plt.subplots(figsize=(9, 4))
-    ax.bar(labels, fees_pct, color="#54A24B")
-    ax.set_title("WFV OOS Fees as % of Gross PnL")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    v = float(fees_pct.iloc[0])
+    ax.plot([0], [v], marker="o", markersize=10)
+    ax.set_xlim(-0.5, 0.5)
+    top = max(5.0, v * 1.4)
+    ax.set_ylim(0, top)
+    ax.set_xticks([0])
+    ax.set_xticklabels([labels[0]])
     ax.set_ylabel("%")
+    ax.set_title("WFV OOS Fees as % of Gross PnL")
+    ax.grid(axis="y", alpha=0.3)
+    ax.annotate(
+        f"{v:.2f}%",
+        (0, v),
+        textcoords="offset points",
+        xytext=(0, 8),
+        ha="center",
+        va="bottom",
+    )
     fig.tight_layout()
     fig.savefig(Path(outdir) / "wfv_fees_pct_gross.png", dpi=150)
 
-    # 5) Exposure % and Hit Rate %
-    exposure = _maybe_percent(df["WFV_OOS_Exposure"])
-    hit = _maybe_percent(df["WFV_OOS_HitRate"])
+    # 4) Optional equity + underwater (if provided)
+    if equity_csv:
+        ecsv = Path(equity_csv)
+        if not ecsv.exists():
+            # also try sibling to summary CSV
+            ecsv = Path(summary_csv).with_name(ecsv.name)
+        if ecsv.exists():
+            edf = pd.read_csv(ecsv, parse_dates=["timestamp"])
+            if {"cum_gross", "cum_net", "drawdown"} <= set(edf.columns):
+                fig, ax = plt.subplots(figsize=(9, 4))
+                ax.plot(edf["timestamp"], edf["cum_gross"], label="Gross")
+                ax.plot(edf["timestamp"], edf["cum_net"], label="Net (after fees)")
+                ax.axhline(0, color="black", ls="--", lw=0.8)
+                ax.set_title("Equity Curve (Gross vs Net)")
+                ax.legend()
+                fig.tight_layout()
+                fig.savefig(out / "equity_curve.png", dpi=150)
 
-    fig, ax = plt.subplots(figsize=(9, 4))
-    ax.bar(labels, exposure, alpha=0.7, label="Exposure %", color="#4C78A8")
-    ax.bar(labels, hit, alpha=0.7, label="Hit Rate %", color="#F58518")
-    ax.set_title("WFV OOS Exposure and Hit Rate (%)")
-    ax.set_ylabel("%")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(Path(outdir) / "wfv_exposure_hit.png", dpi=150)
+                fig, ax = plt.subplots(figsize=(9, 3))
+                ax.fill_between(edf["timestamp"], edf["drawdown"], 0, alpha=0.3)
+                ax.set_title("Underwater Plot (Drawdown %)")
+                fig.tight_layout()
+                fig.savefig(out / "underwater.png", dpi=150)
 
-    # 6) Avg holding time (hours)
-    fig, ax = plt.subplots(figsize=(9, 3.5))
-    ax.bar(
-        labels, pd.to_numeric(df["WFV_OOS_AvgHold"], errors="coerce"), color="#B279A2"
-    )
-    ax.set_title("WFV OOS Average Holding Time (hours)")
-    ax.set_ylabel("Hours")
-    fig.tight_layout()
-    fig.savefig(Path(outdir) / "wfv_avg_hold.png", dpi=150)
-
-    print(f"Saved plots to: {outdir}")
+    print(f"Saved plots to: {out}")
 
 
 def main():
-    script_dir = Path(__file__).resolve().parent
-    default_csv = script_dir / "reports" / "wfv_eth_1h_fee_reduction.csv"
-    default_outdir = script_dir / "reports" / "plots"
-
-    parser = argparse.ArgumentParser(description="Plot WFV summary charts from CSV.")
+    here = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--csv",
-        default=str(default_csv),
-        help="Path to WFV summary CSV",
+        "--csv", default=str(here / "reports" / "wfv_eth_1h_fee_reduction.csv")
     )
+    parser.add_argument("--outdir", default=str(here / "reports" / "plots"))
     parser.add_argument(
-        "--outdir",
-        default=str(default_outdir),
-        help="Directory to save plots",
+        "--equity",
+        default="",
+        help="Optional equity CSV with columns: timestamp,cum_gross,cum_net,drawdown",
     )
     args = parser.parse_args()
-    plot_from_summary(args.csv, args.outdir)
+    plot_summary(args.csv, args.outdir, args.equity or None)
 
 
 if __name__ == "__main__":
