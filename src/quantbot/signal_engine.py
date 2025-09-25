@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import talib
-from .config import settings, get_symbol_params
+from quantbot.config import settings, get_symbol_params
 
 
 def compute_indicators(ohlcv: list):

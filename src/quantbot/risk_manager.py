@@ -1,4 +1,4 @@
-from .config import settings
+from quantbot.config import settings
 
 def cap_position_size(notional: float) -> float:
     return min(notional, settings.max_position_notional)

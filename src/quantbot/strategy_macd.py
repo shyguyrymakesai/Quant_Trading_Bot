@@ -99,7 +99,12 @@ def compute_indicators(
     returns = df["close"].pct_change()
     df["returns"] = returns
     bars_per_day = _bars_per_day(params.bar_minutes)
-    realized = returns.rolling(int(params.vol_lookback)).std() * np.sqrt(bars_per_day)
+    lookback = max(1, int(params.vol_lookback))
+    realized = (
+        returns.rolling(lookback)
+        .apply(lambda window: float(np.sqrt(np.nanmean(np.square(window)))), raw=True)
+        * np.sqrt(bars_per_day)
+    )
     df["realized_vol"] = realized
     return df
 

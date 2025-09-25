@@ -17,10 +17,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
-from .broker import BrokerError, BrokerFactory
-from .config import settings, Settings, get_symbol_params
-from .state import StateStore
-from .strategy_macd import (
+from quantbot.broker import BrokerError, BrokerFactory
+from quantbot.config import settings, Settings, get_symbol_params
+from quantbot.state import StateStore
+from quantbot.strategy_macd import (
     Signal,
     SignalResult,
     StrategyParams,
@@ -31,8 +31,8 @@ from .strategy_macd import (
 )
 
 try:  # optional legacy comparison
-    from .signal_engine import compute_indicators as legacy_indicators
-    from .signal_engine import last_signal as legacy_last_signal
+    from quantbot.signal_engine import compute_indicators as legacy_indicators
+    from quantbot.signal_engine import last_signal as legacy_last_signal
 except Exception:  # pragma: no cover - optional dependency
     legacy_indicators = None
     legacy_last_signal = None
