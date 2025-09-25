@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     vol_target: float = 0.02
     min_size: float = 0.0
     max_size: float = 1.0
+    cooldown_bars: int = 0
+    entry_order_type: str = "market"
+    exit_order_type: str = "market"
+    maker_offset_bps: float = 1.0
+
+    # Consolidated per-symbol overrides (single source of truth)
+    # Keys may be like "BTC-USD", "BTC/USD", or compact forms; we normalize.
+    strategy_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
     # legacy risk fields (retained for backwards compat)
     fees_taker: float = 0.001
@@ -99,7 +107,9 @@ class Settings(BaseSettings):
 
                     parsed = json.loads(value)
                     if isinstance(parsed, list):
-                        return [str(item).strip() for item in parsed if str(item).strip()]
+                        return [
+                            str(item).strip() for item in parsed if str(item).strip()
+                        ]
                 except Exception:
                     pass
             return [s.strip() for s in value.split(",") if s.strip()]
@@ -173,7 +183,10 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["mode"] = cfg.get("mode", cfg.get("env", "paper"))
     out["env"] = cfg.get("mode", cfg.get("env", "paper"))
     out["exchange"] = cfg.get("exchange", "binance")
-    out["symbol"] = cfg.get("symbol", cfg.get("symbols", ["BTC/USDT"])[0] if cfg.get("symbols") else "BTC/USDT")
+    out["symbol"] = cfg.get(
+        "symbol",
+        cfg.get("symbols", ["BTC/USDT"])[0] if cfg.get("symbols") else "BTC/USDT",
+    )
     if "symbols" in cfg:
         out["symbols"] = cfg["symbols"]
     out["timeframe"] = cfg.get("timeframe", "30m")
@@ -187,16 +200,29 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["misfire_grace_time"] = cfg.get("misfire_grace_time", 300)
     out["max_instances"] = cfg.get("max_instances", 1)
     out["max_api_errors"] = cfg.get("max_api_errors", 5)
-    out["circuit_breaker_cooldown_minutes"] = cfg.get("circuit_breaker_cooldown_minutes", 30)
-    out["state_file"] = cfg.get("state_file", cfg.get("state", {}).get("path", "state/bot_state.json"))
+    out["circuit_breaker_cooldown_minutes"] = cfg.get(
+        "circuit_breaker_cooldown_minutes", 30
+    )
+    out["state_file"] = cfg.get(
+        "state_file", cfg.get("state", {}).get("path", "state/bot_state.json")
+    )
     out["log_dir"] = cfg.get("logging", {}).get("dir", cfg.get("log_dir", "logs"))
     out["log_level"] = cfg.get("logging", {}).get("level", cfg.get("log_level", "INFO"))
-    out["start_cash"] = cfg.get("risk", {}).get("start_cash", cfg.get("start_cash", 100_000.0))
-    out["max_leverage"] = cfg.get("risk", {}).get("max_leverage", cfg.get("max_leverage", 1.0))
-    out["notional_buffer"] = cfg.get("risk", {}).get("notional_buffer", cfg.get("notional_buffer", 0.0))
-    out["min_order_notional"] = cfg.get("risk", {}).get("min_order_notional", cfg.get("min_order_notional", 0.0))
-    out["min_order_qty"] = cfg.get("risk", {}).get("min_order_qty", cfg.get("min_order_qty", 0.0))
-
+    out["start_cash"] = cfg.get("risk", {}).get(
+        "start_cash", cfg.get("start_cash", 100_000.0)
+    )
+    out["max_leverage"] = cfg.get("risk", {}).get(
+        "max_leverage", cfg.get("max_leverage", 1.0)
+    )
+    out["notional_buffer"] = cfg.get("risk", {}).get(
+        "notional_buffer", cfg.get("notional_buffer", 0.0)
+    )
+    out["min_order_notional"] = cfg.get("risk", {}).get(
+        "min_order_notional", cfg.get("min_order_notional", 0.0)
+    )
+    out["min_order_qty"] = cfg.get("risk", {}).get(
+        "min_order_qty", cfg.get("min_order_qty", 0.0)
+    )
     strat_cfg = cfg.get("strategy", {})
     macd_cfg = strat_cfg.get("macd", {})
     adx_cfg = strat_cfg.get("adx", {})
@@ -210,6 +236,18 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["vol_target"] = vol_cfg.get("target_vol", 0.02)
     out["min_size"] = vol_cfg.get("min_size", 0.0)
     out["max_size"] = vol_cfg.get("max_size", 1.0)
+    out["cooldown_bars"] = strat_cfg.get("cooldown_bars", cfg.get("cooldown_bars", 0))
+    orders_cfg = strat_cfg.get("orders", {})
+    out["entry_order_type"] = orders_cfg.get(
+        "entry",
+        strat_cfg.get("entry_order_type", cfg.get("entry_order_type", "market")),
+    )
+    out["exit_order_type"] = orders_cfg.get(
+        "exit", strat_cfg.get("exit_order_type", cfg.get("exit_order_type", "market"))
+    )
+    out["maker_offset_bps"] = orders_cfg.get(
+        "maker_offset_bps", cfg.get("maker_offset_bps", 1.0)
+    )
 
     risk_cfg = cfg.get("risk", {})
     out["commission"] = risk_cfg.get("commission", 0.0012)
@@ -233,24 +271,72 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["live_api_secret"] = api_cfg.get("live", {}).get("secret")
     out["live_api_passphrase"] = api_cfg.get("live", {}).get("passphrase")
     out["live_base_url"] = api_cfg.get("live", {}).get("base_url")
+    # Consolidated per-symbol overrides live under strategy_overrides
+    if "strategy_overrides" in cfg and isinstance(cfg["strategy_overrides"], dict):
+        out["strategy_overrides"] = cfg["strategy_overrides"]
     return out
 
 
 settings = Settings(**_flatten_yaml(yaml_cfg))
 
 
-def load_params_yaml(path: str | None = None) -> Dict[str, Any]:
-    env_path = os.getenv("PARAMS_PATH")
-    prm_path = Path(path or env_path or _project_root() / "config" / "params.yaml")
-    if not prm_path.exists():
-        return {}
-    with prm_path.open("r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+def _normalize_symbol_key(symbol: str) -> str:
+    return symbol.replace("/", "").replace("-", "").replace("_", "").upper()
 
 
-params_cfg = load_params_yaml()
+def _iter_symbol_aliases(symbol_ccxt: str) -> List[str]:
+    """Generate common aliases for a symbol to match keys in configs.
+    e.g., BTC/USDT -> [BTCUSDT, BTC-USD, BTC/USD, BTCUSD]
+    """
+    s = symbol_ccxt or ""
+    if not s:
+        return []
+    norm = _normalize_symbol_key(s)
+    aliases = {norm}
+    try:
+        base, quote = s.replace("-", "/").replace("_", "/").split("/")
+    except ValueError:
+        base, quote = s, "USD"
+    # CCXT style
+    aliases.add(f"{base}/{quote}")
+    # Dash style
+    aliases.add(f"{base}-{quote}")
+    # Compact common
+    aliases.add(f"{base}{quote}")
+    # USD override if USDT
+    if quote.upper() == "USDT":
+        aliases.add(f"{base}-USD")
+        aliases.add(f"{base}/USD")
+        aliases.add(f"{base}USD")
+    # Also add uppercase only keys
+    aliases.update({a.upper() for a in list(aliases)})
+    return list(aliases)
 
 
 def get_symbol_params(symbol_ccxt: str) -> Dict[str, Any]:
-    key = symbol_ccxt.replace("/", "-") if symbol_ccxt else symbol_ccxt
-    return params_cfg.get(key, {})
+    """Return per-symbol parameter overrides from YAML `strategy_overrides` only."""
+    if not symbol_ccxt:
+        return {}
+    aliases = _iter_symbol_aliases(symbol_ccxt)
+
+    # YAML consolidated overrides
+    try:
+        overrides = getattr(settings, "strategy_overrides", {}) or {}
+        if isinstance(overrides, dict):
+            # allow both key forms and nested dicts
+            for a in aliases:
+                if a in overrides and isinstance(overrides[a], dict):
+                    return dict(overrides[a])
+            # try normalized keys
+            over_norm = {
+                _normalize_symbol_key(k): v
+                for k, v in overrides.items()
+                if isinstance(v, dict)
+            }
+            for a in aliases:
+                na = _normalize_symbol_key(a)
+                if na in over_norm:
+                    return dict(over_norm[na])
+    except Exception:
+        pass
+    return {}

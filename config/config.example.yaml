@@ -1,39 +1,85 @@
-# config/config.example.yaml
-mode: "paper"            # paper | live
-exchange: "binance"      # binance | coinbase
-symbol: "BTC/USDT"
+mode: "paper"
+exchange: "coinbase"
+symbol: "BTC/USD"
 timeframe: "1h"
-base_currency: "USDT"
+base_currency: "USD"
 
-# Fees & slippage (taker fees typical for spot)
+tz: "America/New_York"
+
 fees:
-  taker: 0.001           # 0.10%
-  slippage_bps: 2        # 2 bps assumed
+  taker: 0.001
+  slippage_bps: 2
 
 risk:
-  daily_loss_cap_pct: 0.01   # stop trading if -1% day PnL
-  max_position_notional: 25  # hard cap (USDT)
+  commission: 0.0012
+  risk_frac: 0.20
+  max_pos_frac: 0.30
+  daily_loss_limit: -0.02
+  spread_bps_limit: 15
+  slippage_bps: 10
 
 strategy:
   macd:
-    fast: 12
-    slow: 26
+    fast: 8
+    slow: 24
     signal: 9
   adx:
     length: 14
     threshold: 25
   vol_target:
-    lookback: 20          # realized vol window (bars)
-    target_vol: 0.02      # target daily vol (example)
+    lookback: 30
+    target_vol: 0.02
     min_size: 0.0
     max_size: 1.0
+  cooldown_bars: 6
+  orders:
+    entry: "limit_post_only"
+    exit: "market"
+    maker_offset_bps: 1.5
 
-# API keys (use env vars in production)
 api_keys:
   binance:
     key: "YOUR_BINANCE_TESTNET_KEY"
     secret: "YOUR_BINANCE_TESTNET_SECRET"
   coinbase:
-    key: "YOUR_COINBASE_KEY"
-    secret: "YOUR_COINBASE_SECRET"
+    key: "YOUR_COINBASE_API_KEY"
+    secret: "YOUR_COINBASE_API_SECRET"
     passphrase: "YOUR_PASSPHRASE"
+
+# Optional: consolidated per-symbol overrides (preferred) — highest precedence
+# Keys are symbol aliases; values are override maps. Supported fields include:
+# - fast, slow, signal (MACD)
+# - adx_len, adx_th
+# - vol_lb, daily_vol_target
+# - cooldown_bars
+# - entry_order_type, exit_order_type (e.g., limit_post_only, limit, market)
+# - risk_frac (position sizing multiplier before caps)
+# - maker_offset_bps (post-only limit price bias)
+# Example below shows BTC/USD and ETH/USD overrides.
+strategy_overrides:
+  BTC/USD:
+    fast: 8
+    slow: 21
+    signal: 9
+    adx_len: 14
+    adx_th: 20
+    vol_lb: 30
+    daily_vol_target: 0.02
+    cooldown_bars: 4
+    entry_order_type: "limit_post_only"
+    exit_order_type: "market"
+    risk_frac: 0.25
+    maker_offset_bps: 1.5
+  ETH-USD:
+    fast: 12
+    slow: 26
+    signal: 9
+    adx_len: 14
+    adx_th: 25
+    vol_lb: 40
+    daily_vol_target: 0.025
+    cooldown_bars: 6
+    entry_order_type: "limit_post_only"
+    exit_order_type: "market"
+    risk_frac: 0.20
+    maker_offset_bps: 2.0

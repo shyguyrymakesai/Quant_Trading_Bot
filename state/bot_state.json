@@ -1,0 +1,94 @@
+{
+  "account": {
+    "cash": 100000.0,
+    "equity": 100000.0,
+    "start_cash": 100000.0,
+    "updated": "2025-09-24T17:00:31.754046+00:00"
+  },
+  "cycles": [
+    {
+      "candle": "2025-09-24T14:00:00+00:00",
+      "payload": {
+        "equity": 100000.0,
+        "order": null,
+        "parity_ok": false,
+        "price": 112901.66,
+        "reason": "adx_below_threshold",
+        "signal": "HOLD",
+        "target_fraction": 0.1,
+        "volatility": 0.010490219444555894,
+        "volatility_scale": 1.0
+      },
+      "recorded": "2025-09-24T14:00:32.366167+00:00",
+      "symbol": "BTC/USD"
+    },
+    {
+      "candle": "2025-09-24T15:00:00+00:00",
+      "payload": {
+        "equity": 100000.0,
+        "order": null,
+        "parity_ok": false,
+        "price": 113693.66,
+        "reason": "hold",
+        "signal": "HOLD",
+        "target_fraction": 0.1,
+        "volatility": 0.01330210371245658,
+        "volatility_scale": 1.0
+      },
+      "recorded": "2025-09-24T15:30:21.545511+00:00",
+      "symbol": "BTC/USD"
+    },
+    {
+      "candle": "2025-09-24T16:00:00+00:00",
+      "payload": {
+        "equity": 100000.0,
+        "order": null,
+        "parity_ok": false,
+        "price": 113409.62,
+        "reason": "hold",
+        "signal": "HOLD",
+        "target_fraction": 0.1,
+        "volatility": 0.013744399758642101,
+        "volatility_scale": 1.0
+      },
+      "recorded": "2025-09-24T16:00:31.582048+00:00",
+      "symbol": "BTC/USD"
+    },
+    {
+      "candle": "2025-09-24T17:00:00+00:00",
+      "payload": {
+        "equity": 100000.0,
+        "order": null,
+        "parity_ok": false,
+        "price": 113705.91,
+        "reason": "adx_below_threshold",
+        "signal": "HOLD",
+        "target_fraction": 0.1,
+        "volatility": 0.014093194248316265,
+        "volatility_scale": 1.0
+      },
+      "recorded": "2025-09-24T17:00:31.774551+00:00",
+      "symbol": "BTC/USD"
+    }
+  ],
+  "last_actions": {},
+  "last_processed": {
+    "BTC/USD": "2025-09-24T17:00:00+00:00"
+  },
+  "market_prices": {
+    "BTC/USD": {
+      "price": 113705.91,
+      "updated": "2025-09-24T17:00:31.687110+00:00"
+    }
+  },
+  "order_history": [],
+  "orders": {},
+  "positions": {},
+  "run_lock": {
+    "BTC/USD": {
+      "candle": "2025-09-24T17:00:00+00:00",
+      "status": "done",
+      "ts": "2025-09-24T17:00:31.789232+00:00"
+    }
+  }
+}

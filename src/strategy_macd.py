@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Dict, Iterable, List, Sequence
+from datetime import datetime
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -16,11 +17,14 @@ class StrategyParams:
     macd_signal: int = 9
     adx_length: int = 14
     adx_threshold: float = 20.0
-    vol_lookback: int = 20
+    vol_lookback: int = 30
     target_daily_vol: float = 0.02
     min_fraction: float = 0.0
     max_fraction: float = 1.0
-    bar_minutes: int = 30
+    cooldown_bars: int = 0
+    entry_order_type: str = "market"
+    exit_order_type: str = "market"
+    bar_minutes: int = 60
 
 
 class Signal(Enum):
@@ -112,6 +116,47 @@ def position_sizer(
     return float(np.clip(target_vol / vol_estimate, min_fraction, max_fraction))
 
 
+def _coerce_datetime(value: Optional[datetime | pd.Timestamp | str]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+def apply_cooldown(
+    result: SignalResult,
+    params: StrategyParams,
+    *,
+    last_exit_ts: Optional[datetime],
+    current_ts: datetime,
+) -> SignalResult:
+    cooldown = max(0, int(params.cooldown_bars))
+    meta = dict(result.meta)
+    if cooldown <= 0 or result.signal != Signal.BUY:
+        meta.setdefault("cooldown_active", False)
+        if cooldown > 0:
+            meta.setdefault("cooldown_bars", cooldown)
+        return replace(result, meta=meta)
+    prev_ts = _coerce_datetime(last_exit_ts)
+    cur_ts = _coerce_datetime(current_ts)
+    if prev_ts is None or cur_ts is None:
+        meta.update({"cooldown_active": False, "cooldown_bars": cooldown})
+        return replace(result, meta=meta)
+    bar_minutes = max(1, int(params.bar_minutes or 1))
+    elapsed_minutes = max(0.0, (cur_ts - prev_ts).total_seconds() / 60.0)
+    bars_elapsed = int(elapsed_minutes // bar_minutes)
+    meta.update({"cooldown_active": bars_elapsed < cooldown, "cooldown_bars": cooldown, "bars_since_exit": bars_elapsed})
+    if bars_elapsed < cooldown:
+        return replace(result, signal=Signal.HOLD, reason="cooldown_active", meta=meta)
+    return replace(result, meta=meta)
+
 def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
     if df.empty or len(df) < 2:
         return SignalResult(
@@ -178,11 +223,18 @@ def compute_signal_history(
     lookback: int = 10,
 ) -> List[SignalResult]:
     results: List[SignalResult] = []
+    last_exit_ts: Optional[datetime] = None
     for idx in range(len(df)):
         window = df.iloc[: idx + 1]
         if len(window) < 2:
             continue
-        results.append(compute_signal(window, params))
+        res = compute_signal(window, params)
+        ts = window.index[-1]
+        current_ts = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else _coerce_datetime(ts) or datetime.fromisoformat(str(ts))
+        res = apply_cooldown(res, params, last_exit_ts=last_exit_ts, current_ts=current_ts)
+        results.append(res)
+        if res.signal == Signal.SELL:
+            last_exit_ts = current_ts
     return results[-lookback:]
 
 
@@ -194,4 +246,5 @@ __all__ = [
     "compute_signal",
     "compute_signal_history",
     "position_sizer",
+    "apply_cooldown",
 ]

@@ -6,8 +6,8 @@ pulls fresh OHLCV, validates parity against the research engine, sizes risk via
 Moreira–Muir style vol targeting, and routes paper orders through a broker
 adapter.
 
-This repository still ships the research utilities (fast sweeps, backtests), but
-now includes an ops-ready paper trading stack:
+This repository still ships the research utilities (fast sweeps, backtests), and
+includes an ops-ready paper trading stack:
 
 - **`src/bot_daemon.py`** — APScheduler daemon with circuit breaker,
   parity check, signal-safe shutdown, and structured logging.
@@ -17,14 +17,15 @@ now includes an ops-ready paper trading stack:
   with a thin ccxt-backed live skeleton.
 - **`src/state.py`** — JSON-backed journal storing run locks, orders,
   positions, cycle metadata, and market marks.
-- **`config/.env`**-style configuration via `src/config.py` with
-  `ENV=paper|live`, DRY_RUN toggle, and per-symbol parameters.
+- Single-file YAML configuration in `config/config.yaml` via `src/config.py`, with
+  `.env` env-var overrides, `ENV=paper|live`, DRY_RUN toggle, and per-symbol parameters.
 - Docker + docker-compose packaging for hands-free deploys.
 
 ## 1. Configuration
 
-The daemon reads both YAML (optional legacy) and environment variables. The
-simplest path is to copy `.env.example` to `.env` and tweak values:
+The daemon reads `config/config.yaml` + environment variables via Pydantic. The simplest path
+is to copy `.env.example` to `.env` and tweak values. For per-symbol strategy
+overrides, add them to `config/config.yaml` under `strategy_overrides` (see below).
 
 ```bash
 cp .env.example .env
@@ -49,8 +50,21 @@ Key settings:
 | `LOG_DIR` | Directory for rotating daemon logs. |
 | API keys | `PAPER_*` and `LIVE_*` credentials/endpoints. |
 
-Per-symbol overrides can still be supplied via `config/params.yaml` and are
-merged automatically.
+Per-symbol overrides live in `config/config.yaml`:
+
+```yaml
+strategy_overrides:
+  BTC-USD:    # keys can be BTC/USD, BTCUSDT, etc.; forms are normalized
+    fast: 8
+    slow: 24
+    signal: 9
+    adx_th: 22
+    vol_lb: 30
+    daily_vol_target: 0.02
+    risk_frac: 0.20
+```
+
+This project now uses a single config file; legacy `params.yaml`/JSON are removed.
 
 ## 2. Running the daemon locally
 
@@ -115,11 +129,60 @@ Run them with:
 pytest
 ```
 
-## 6. Research toolkit (unchanged)
+## 6. Research toolkit (backtests + parameter sweeps)
 
-The `research/` folder retains the historical MACD/ADX sweep + backtesting
-scripts, and `src/` still exposes reusable adapters for data and execution. Use
-those utilities for extended analysis and parameter generation.
+The `research/` folder contains reproducible backtests and a flexible sweep engine built around TA-Lib:
+
+- `research/backtest_macd_adx_talib.py`
+  - Runs a sanity strategy backtest using TA-Lib MACD/ADX.
+  - Suppresses divide-by-zero warnings from Sortino when there are no negative returns.
+
+- `research/sweep_macd_adx.py`
+  - Runs grid searches over MACD/ADX/volatility-target parameters.
+  - Has three modes and optional overrides:
+    - `--mode fast` (default): slimmer grid, fewer folds, quicker iteration.
+    - `--mode full`: expanded grid (1h and 4h), more folds.
+    - `--mode orig`: original canonical params (MACD 12/26/9, ADX 25, vol_lb 20, target_vol 0.02).
+    - `--symbols` to override symbols (e.g., `BTC-USD ETH-USD`).
+    - `--timeframes` to override timeframes (e.g., `1h 4h`).
+
+### Run backtests and sweeps (Windows PowerShell)
+
+```powershell
+# Backtest sanity check (TA-Lib based)
+python research\backtest_macd_adx_talib.py
+
+# Fast parameter sweep
+python research\sweep_macd_adx.py --mode fast
+
+# Full sweep across 1h and 4h
+python research\sweep_macd_adx.py --mode full
+
+# Original canonical single-combo sweep
+python research\sweep_macd_adx.py --mode orig
+
+# Override symbols and timeframes
+python research\sweep_macd_adx.py --mode full --symbols BTC-USD ETH-USD SOL-USD --timeframes 1h 4h
+```
+
+Outputs (saved next to the sweep script):
+- `research/sweep_results_full.csv`: all combos evaluated.
+- `research/sweep_results_filtered.csv`: post-filter by minimum trades and basic OOS criteria.
+- `research/sweep_walkforward.csv`: light walk-forward validation summary for top-K per symbol.
+
+Data sources and timeframes:
+- Primary: Coinbase Advanced 1h OHLCV via CCXT.
+- Fallback: yfinance hourly for symbols like `BTC-USD`, `ETH-USD` if Coinbase fetch fails.
+- 4h bars are produced by local resampling from 1h in research.
+
+Parameters and live alignment:
+- Per-symbol overrides live in `config/config.yaml` under `strategy_overrides`.
+  Keys can be `BTC/USD`, `BTC-USD`, `BTCUSDT`, etc.; the loader normalizes common forms.
+- Strategy defaults (e.g., MACD 12/26/9, ADX threshold 25, vol lookback 20,
+  target_vol 0.02) are set in code and can be overridden by YAML or environment variables.
+
+Paper-trade CSV logging:
+- When running the paper bot, each paper order is appended to `logs/paper_trades.csv` with timestamp, symbol, side, qty, price, realized_vol, size_scale, and estimated spread_bps. This complements the persistent state/journal.
 
 ---
 
@@ -130,6 +193,6 @@ those utilities for extended analysis and parameter generation.
 - `src/broker.py` — broker adapters.
 - `src/state.py` — persistent journal + run locks.
 - `Dockerfile`, `docker-compose.yml` — container runtime.
-- `.env.example` — starter configuration.
+- `.env.example` — starter configuration and env-var overrides.
 
 For detailed code structure see inline docstrings and comments.

@@ -51,6 +51,9 @@ class BaseBroker:
         price: float,
         *,
         order_type: str = "market",
+        time_in_force: str = "GTC",
+        post_only: bool = False,
+        reduce_only: bool = False,
         client_order_id: Optional[str] = None,
         timestamp: Optional[str] = None,
     ) -> OrderResponse:  # pragma: no cover
@@ -85,6 +88,9 @@ class PaperBroker(BaseBroker):
         price: float,
         *,
         order_type: str = "market",
+        time_in_force: str = "GTC",
+        post_only: bool = False,
+        reduce_only: bool = False,
         client_order_id: Optional[str] = None,
         timestamp: Optional[str] = None,
     ) -> OrderResponse:
@@ -119,8 +125,13 @@ class PaperBroker(BaseBroker):
                 "status": "dry_run",
                 "timestamp": ts,
                 "order_type": order_type,
+                "time_in_force": time_in_force,
+                "post_only": bool(post_only),
+                "reduce_only": bool(reduce_only),
                 "filled_qty": 0.0,
             }
+            if side.lower() == "sell":
+                payload.setdefault("last_exit_ts", ts)
             self.state.record_order(client_order_id, payload)
             self.state.set_last_action(symbol, side.upper(), ts=ts, order_id=client_order_id, meta=payload)
             return OrderResponse(
@@ -151,6 +162,9 @@ class PaperBroker(BaseBroker):
                 "status": "rejected",
                 "timestamp": ts,
                 "order_type": order_type,
+                "time_in_force": time_in_force,
+                "post_only": bool(post_only),
+                "reduce_only": bool(reduce_only),
                 "reason": "no_position",
                 "filled_qty": 0.0,
             }
@@ -197,8 +211,13 @@ class PaperBroker(BaseBroker):
             "status": "filled",
             "timestamp": ts,
             "order_type": order_type,
+            "time_in_force": time_in_force,
+            "post_only": bool(post_only),
+            "reduce_only": bool(reduce_only),
             "fee": float(fee),
         }
+        if side.lower() == "sell":
+            payload.setdefault("last_exit_ts", ts)
         self.state.record_order(client_order_id, payload)
         self.state.set_last_action(symbol, side.upper(), ts=ts, order_id=client_order_id, meta=payload)
         return OrderResponse(
@@ -267,6 +286,9 @@ class LiveBroker(BaseBroker):
         price: float,
         *,
         order_type: str = "market",
+        time_in_force: str = "GTC",
+        post_only: bool = False,
+        reduce_only: bool = False,
         client_order_id: Optional[str] = None,
         timestamp: Optional[str] = None,
     ) -> OrderResponse:
@@ -274,6 +296,12 @@ class LiveBroker(BaseBroker):
         params: Dict[str, object] = {}
         if client_order_id:
             params["clientOrderId"] = client_order_id
+        if time_in_force:
+            params["timeInForce"] = time_in_force
+        if post_only:
+            params["postOnly"] = True
+        if reduce_only:
+            params["reduceOnly"] = True
         ccxt_price = price if order_type.lower() != "market" else None
         order = self.exchange.create_order(market_symbol, order_type, side, qty, ccxt_price, params)
         ts = timestamp or str(order.get("datetime") or _utcnow())

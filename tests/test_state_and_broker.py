@@ -1,5 +1,9 @@
 from pathlib import Path
 import sys
+import types
+
+if 'ccxt' not in sys.modules:
+    sys.modules['ccxt'] = types.SimpleNamespace()
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 

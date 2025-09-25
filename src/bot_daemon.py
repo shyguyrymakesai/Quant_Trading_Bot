@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import signal
@@ -17,12 +18,13 @@ from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
 from .broker import BrokerError, BrokerFactory
-from .config import settings, Settings
+from .config import settings, Settings, get_symbol_params
 from .state import StateStore
 from .strategy_macd import (
     Signal,
     SignalResult,
     StrategyParams,
+    apply_cooldown,
     compute_indicators,
     compute_signal,
     compute_signal_history,
@@ -43,17 +45,28 @@ class DataFetcher:
     def __init__(self, cfg: Settings) -> None:
         provider = (cfg.data_provider or cfg.exchange or "binance").lower()
         if provider == "binance":
-            self.exchange = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "spot"}})
+            self.exchange = ccxt.binance(
+                {"enableRateLimit": True, "options": {"defaultType": "spot"}}
+            )
         elif provider in {"coinbase", "coinbaseadvanced"}:
             self.exchange = ccxt.coinbaseadvanced({"enableRateLimit": True})
         else:
             raise ValueError(f"Unsupported data provider: {provider}")
         self.cfg = cfg
-        self.exchange.load_markets()
+        # In paper mode, avoid authenticated market discovery which may hit private endpoints
+        if cfg.is_live:
+            try:
+                self.exchange.load_markets()
+            except Exception as exc:
+                logger.warning(
+                    "load_markets failed (%s); proceeding without cached markets", exc
+                )
 
     def fetch(self, symbol: str, timeframe: str, limit: int) -> List[List[float]]:
         market_symbol = self.cfg.as_ccxt_symbol(symbol)
-        return self.exchange.fetch_ohlcv(market_symbol, timeframe=timeframe, limit=limit)
+        return self.exchange.fetch_ohlcv(
+            market_symbol, timeframe=timeframe, limit=limit
+        )
 
 
 def _setup_logging(cfg: Settings) -> None:
@@ -98,7 +111,9 @@ def _make_order_id(symbol: str, candle_key: str, side: str, qty: float) -> str:
     return hashlib.sha1(base.encode()).hexdigest()[:20]
 
 
-def _extract_equity(account: Dict[str, object], default: float, quote_currency: str) -> float:
+def _extract_equity(
+    account: Dict[str, object], default: float, quote_currency: str
+) -> float:
     if not isinstance(account, dict):
         return default
     if "equity" in account:
@@ -129,6 +144,8 @@ class BotDaemon:
         self.api_error_count = 0
         self.circuit_breaker = False
         self.bar_minutes = _parse_timeframe_minutes(cfg.timeframe)
+        # Strategy overrides are loaded from YAML strategy_overrides only
+        self.maker_offset = float(getattr(cfg, "maker_offset_bps", 1.0)) / 10_000.0
         self.params = StrategyParams(
             macd_fast=cfg.macd_fast,
             macd_slow=cfg.macd_slow,
@@ -139,13 +156,203 @@ class BotDaemon:
             target_daily_vol=cfg.vol_target,
             min_fraction=cfg.min_size,
             max_fraction=cfg.max_size,
+            cooldown_bars=int(cfg.cooldown_bars),
+            entry_order_type=cfg.entry_order_type,
+            exit_order_type=cfg.exit_order_type,
             bar_minutes=self.bar_minutes,
         )
+        self.risk_frac = cfg.risk_frac
+        self.entry_order_type = self.params.entry_order_type
+        self.exit_order_type = self.params.exit_order_type
+        overrides = self._load_strategy_overrides(cfg.symbol)
+        if overrides:
+            self._apply_strategy_overrides(overrides)
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        return symbol.replace("/", "").replace("-", "").replace("_", "").upper()
+
+    def _load_strategy_overrides(self, symbol: str) -> Dict[str, object]:
+        """Return per-symbol overrides from YAML via config.get_symbol_params."""
+        try:
+            return dict(get_symbol_params(symbol))
+        except Exception:
+            return {}
+
+    def _apply_strategy_overrides(self, overrides: Dict[str, object]) -> None:
+        if not overrides:
+            return
+        params_dict = {**self.params.__dict__}
+        mapping = {
+            "fast": "macd_fast",
+            "slow": "macd_slow",
+            "signal": "macd_signal",
+            "adx_len": "adx_length",
+            "adx_th": "adx_threshold",
+            "vol_lb": "vol_lookback",
+            "daily_vol_target": "target_daily_vol",
+            "cooldown_bars": "cooldown_bars",
+            "entry_order_type": "entry_order_type",
+            "exit_order_type": "exit_order_type",
+        }
+        for key, attr in mapping.items():
+            if key in overrides and overrides[key] is not None:
+                value = overrides[key]
+                if attr in {
+                    "macd_fast",
+                    "macd_slow",
+                    "macd_signal",
+                    "adx_length",
+                    "vol_lookback",
+                    "cooldown_bars",
+                }:
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                elif attr == "target_daily_vol":
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                params_dict[attr] = value
+        params_dict["bar_minutes"] = self.bar_minutes
+        params_dict["vol_lookback"] = int(
+            params_dict.get("vol_lookback", self.params.vol_lookback)
+        )
+        params_dict["cooldown_bars"] = int(
+            params_dict.get("cooldown_bars", self.params.cooldown_bars)
+        )
+        self.params = StrategyParams(**params_dict)
+        self.entry_order_type = self.params.entry_order_type
+        self.exit_order_type = self.params.exit_order_type
+        if "risk_frac" in overrides and overrides["risk_frac"] is not None:
+            try:
+                self.risk_frac = float(overrides["risk_frac"])
+            except (TypeError, ValueError):
+                pass
+        if (
+            "maker_offset_bps" in overrides
+            and overrides["maker_offset_bps"] is not None
+        ):
+            try:
+                self.maker_offset = float(overrides["maker_offset_bps"]) / 10_000.0
+            except (TypeError, ValueError):
+                pass
+
+    def _cron_trigger(self) -> CronTrigger:
+        if self.bar_minutes >= 60:
+            return CronTrigger(minute=0, second=5, timezone=self.tz)
+        if self.bar_minutes == 30:
+            return CronTrigger(minute="0,30", second=5, timezone=self.tz)
+        if self.bar_minutes == 15:
+            return CronTrigger(minute="0,15,30,45", second=5, timezone=self.tz)
+        return CronTrigger(second=5, timezone=self.tz)
+
+    def _maker_price(
+        self, reference_price: float, side: str, offset: Optional[float] = None
+    ) -> float:
+        price = float(reference_price)
+        bias = self.maker_offset if offset is None else float(offset)
+        bias = max(0.0, bias)
+        if price <= 0 or bias == 0.0:
+            return max(price, 0.0)
+        if side.lower() == "buy":
+            return max(0.0, price * (1 - bias))
+        return max(0.0, price * (1 + bias))
+
+    def _order_plan(
+        self, side: str, qty: float, last_price: float, reference_price: Optional[float]
+    ) -> Dict[str, object]:
+        base_price = (
+            reference_price if reference_price and reference_price > 0 else last_price
+        )
+        preference = (
+            self.entry_order_type if side.lower() == "buy" else self.exit_order_type
+        )
+        pref = (preference or "market").lower()
+        plan = {
+            "order_type": "market",
+            "time_in_force": "GTC",
+            "post_only": False,
+            "reduce_only": side.lower() == "sell",
+            "price": last_price,
+        }
+        if pref in {"limit", "limit_post_only"}:
+            plan["order_type"] = "limit"
+            plan["post_only"] = pref == "limit_post_only"
+            plan["price"] = self._maker_price(base_price, side)
+        elif pref == "market":
+            plan["order_type"] = "market"
+            plan["price"] = last_price
+            plan["post_only"] = False
+        else:
+            plan["order_type"] = pref
+            plan["price"] = base_price
+            plan["post_only"] = False
+        return plan
+
+    def _place_order_with_retry(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        plan: Dict[str, object],
+        order_id: str,
+        timestamp: str,
+        last_price: float,
+    ):
+        attempts = 0
+        price = float(plan.get("price", last_price))
+        while True:
+            try:
+                return self.broker.place_order(
+                    symbol,
+                    side,
+                    qty,
+                    price,
+                    order_type=str(plan.get("order_type", "market")),
+                    time_in_force=str(plan.get("time_in_force", "GTC")),
+                    post_only=bool(plan.get("post_only", False)),
+                    reduce_only=bool(plan.get("reduce_only", False)),
+                    client_order_id=order_id,
+                    timestamp=timestamp,
+                )
+            except BrokerError as exc:
+                if (
+                    plan.get("order_type") == "limit"
+                    and plan.get("post_only")
+                    and attempts < 1
+                ):
+                    attempts += 1
+                    price = self._maker_price(
+                        last_price, side, self.maker_offset * (attempts + 1)
+                    )
+                    plan["price"] = price
+                    logger.warning(
+                        "Retrying post-only limit %s with wider offset (attempt %s)",
+                        order_id,
+                        attempts,
+                    )
+                    continue
+                raise
+
+    def _last_exit_timestamp(self, symbol: str) -> Optional[datetime]:
+        record = self.state.get_last_action(symbol)
+        if not record:
+            return None
+        meta = record.get("meta") or {}
+        ts_str = meta.get("last_exit_ts") or record.get("ts")
+        if not ts_str:
+            return None
+        try:
+            return datetime.fromisoformat(ts_str)
+        except ValueError:
+            return None
 
     async def start(self) -> None:
         _setup_logging(self.cfg)
         self._setup_signal_handlers()
-        trigger = CronTrigger(minute="0,30", second=0, timezone=self.tz)
+        trigger = self._cron_trigger()
         self.scheduler.add_job(
             self.run_cycle,
             trigger=trigger,
@@ -153,7 +360,9 @@ class BotDaemon:
             coalesce=True,
             misfire_grace_time=self.cfg.misfire_grace_time,
         )
-        self.scheduler.add_listener(self._job_listener, EVENT_JOB_ERROR | EVENT_JOB_MISSED)
+        self.scheduler.add_listener(
+            self._job_listener, EVENT_JOB_ERROR | EVENT_JOB_MISSED
+        )
         self.scheduler.start()
         logger.info(
             "Bot daemon started in %s mode (dry_run=%s) for symbols %s",
@@ -173,7 +382,9 @@ class BotDaemon:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._shutdown(s)))
+                loop.add_signal_handler(
+                    sig, lambda s=sig: asyncio.create_task(self._shutdown(s))
+                )
             except NotImplementedError:  # pragma: no cover - Windows
                 signal.signal(sig, lambda *_: asyncio.create_task(self._shutdown(sig)))
 
@@ -205,13 +416,18 @@ class BotDaemon:
         if errors == 0:
             self.api_error_count = 0
         if self.api_error_count >= self.cfg.max_api_errors:
-            logger.error("Circuit breaker triggered after %s consecutive errors", self.api_error_count)
+            logger.error(
+                "Circuit breaker triggered after %s consecutive errors",
+                self.api_error_count,
+            )
             self.circuit_breaker = True
             self.scheduler.pause()
         logger.info("Cycle end at %s", datetime.now(tz=self.tz).isoformat())
 
     async def _process_symbol(self, symbol: str, cycle_start: datetime) -> None:
-        raw = await asyncio.to_thread(self.data.fetch, symbol, self.cfg.timeframe, self.cfg.lookback_limit)
+        raw = await asyncio.to_thread(
+            self.data.fetch, symbol, self.cfg.timeframe, self.cfg.lookback_limit
+        )
         df = compute_indicators(raw, self.params)
         df.index = df.index.tz_convert(self.tz)
         last_price = float(df["close"].iloc[-1])
@@ -233,12 +449,39 @@ class BotDaemon:
                 return
             self.state.update_market_price(symbol, last_price)
             signal_result = compute_signal(df, self.params)
+            cooldown_ts = self._last_exit_timestamp(symbol)
+            current_ts = (
+                last_close.to_pydatetime()
+                if hasattr(last_close, "to_pydatetime")
+                else datetime.fromisoformat(str(last_close))
+            )
+            signal_result = apply_cooldown(
+                signal_result,
+                self.params,
+                last_exit_ts=cooldown_ts,
+                current_ts=current_ts,
+            )
+            if signal_result.meta.get("cooldown_active"):
+                logger.debug(
+                    "Cooldown active for %s (bars_since_exit=%s of %s)",
+                    symbol,
+                    signal_result.meta.get("bars_since_exit"),
+                    signal_result.meta.get("cooldown_bars"),
+                )
             parity_ok = self._parity_check(raw, df, signal_result.signal)
             account = self.broker.get_account()
-            equity = _extract_equity(account, self.cfg.start_cash, self.cfg.quote_currency)
+            equity = _extract_equity(
+                account, self.cfg.start_cash, self.cfg.quote_currency
+            )
             position = self.broker.get_position(symbol)
             current_qty = float(position.get("qty", 0.0))
-            target_fraction = max(self.cfg.min_size, min(self.cfg.max_pos_frac, self.cfg.risk_frac * signal_result.volatility_scale))
+            target_fraction = max(
+                self.cfg.min_size,
+                min(
+                    self.cfg.max_pos_frac,
+                    self.risk_frac * signal_result.volatility_scale,
+                ),
+            )
             leverage = self.cfg.max_leverage if self.cfg.max_leverage > 0 else 1.0
             target_notional = equity * target_fraction * leverage
             target_qty = target_notional / last_price if last_price > 0 else 0.0
@@ -249,29 +492,48 @@ class BotDaemon:
             delta_qty = target_qty - current_qty
             min_qty = max(self.cfg.min_order_qty, 1e-8)
             order_info: Optional[Dict[str, object]] = None
+            order_plan: Optional[Dict[str, object]] = None
+            side = ""
+            order_qty = 0.0
             if signal_result.signal == Signal.BUY:
                 side = "buy"
                 order_qty = max(0.0, delta_qty)
+                order_plan = self._order_plan(side, order_qty, last_price, last_price)
             elif signal_result.signal == Signal.SELL:
                 side = "sell"
                 order_qty = max(0.0, -delta_qty)
-            else:
-                side = ""
-                order_qty = 0.0
+                order_plan = self._order_plan(side, order_qty, last_price, last_price)
 
-            if order_qty >= min_qty and signal_result.signal != Signal.HOLD:
+            if (
+                order_plan
+                and order_qty >= min_qty
+                and signal_result.signal != Signal.HOLD
+            ):
                 order_id = _make_order_id(symbol, candle_key, side, order_qty)
                 try:
-                    response = self.broker.place_order(
+                    response = self._place_order_with_retry(
                         symbol,
                         side,
                         order_qty,
+                        order_plan,
+                        order_id,
+                        last_close.isoformat(),
                         last_price,
-                        order_type="market",
-                        client_order_id=order_id,
-                        timestamp=last_close.isoformat(),
                     )
                     order_info = response.info
+                    action_meta = dict(order_plan)
+                    if isinstance(order_info, dict):
+                        action_meta.update(order_info)
+                    action_meta["qty"] = order_qty
+                    if side.lower() == "sell":
+                        action_meta.setdefault("last_exit_ts", last_close.isoformat())
+                    self.state.set_last_action(
+                        symbol,
+                        side.upper(),
+                        ts=last_close.isoformat(),
+                        order_id=response.order_id,
+                        meta=action_meta,
+                    )
                 except BrokerError as exc:
                     logger.error("Order failure for %s: %s", symbol, exc)
             else:
@@ -281,6 +543,7 @@ class BotDaemon:
                     signal_result.signal.value,
                     delta_qty,
                 )
+
             self.state.record_cycle(
                 symbol,
                 candle_key,
@@ -293,11 +556,17 @@ class BotDaemon:
                     "equity": equity,
                     "price": last_price,
                     "order": order_info,
+                    "order_plan": order_plan,
+                    "signal_meta": signal_result.meta,
                     "parity_ok": parity_ok,
+                    "cooldown_bars": self.params.cooldown_bars,
+                    "maker_offset": self.maker_offset,
                 },
             )
 
-    def _parity_check(self, raw: List[List[float]], df: pd.DataFrame, latest_signal: Signal) -> bool:
+    def _parity_check(
+        self, raw: List[List[float]], df: pd.DataFrame, latest_signal: Signal
+    ) -> bool:
         if not legacy_indicators or not legacy_last_signal:
             return True
         try:
@@ -314,7 +583,12 @@ class BotDaemon:
             legacy_signals.append(str(sig).upper())
         if not legacy_signals:
             return True
-        ours = [res.signal.value for res in compute_signal_history(df, self.params, lookback=len(legacy_signals))]
+        ours = [
+            res.signal.value
+            for res in compute_signal_history(
+                df, self.params, lookback=len(legacy_signals)
+            )
+        ]
         legacy_tail = legacy_signals[-len(ours) :]
         mismatches = sum(1 for a, b in zip(ours, legacy_tail) if a != b)
         if mismatches:

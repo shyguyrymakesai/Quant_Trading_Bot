@@ -3,12 +3,17 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-import pandas as pd
 import pytest
+from datetime import datetime, timedelta, timezone
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 from src.strategy_macd import (
     Signal,
+    SignalResult,
     StrategyParams,
+    apply_cooldown,
     compute_indicators,
     compute_signal,
     position_sizer,
@@ -78,3 +83,69 @@ def test_compute_signal_sell_and_gating():
     result_low = compute_signal(df_low_adx, params)
     assert result_low.signal == Signal.HOLD
     assert result_low.reason == "adx_below_threshold"
+
+
+def make_noisy_ohlcv(periods: int = 60):
+    index = pd.date_range("2024-01-01", periods=periods, freq="1h", tz="UTC")
+    data = []
+    base = 100.0
+    for i, ts in enumerate(index):
+        swing = 5.0 * np.sin(i / 3.0)
+        price = base + swing
+        high = price + 1.5
+        low = price - 1.5
+        close = price
+        data.append([int(ts.timestamp() * 1000), price, high, low, close, 15.0])
+        base += 0.2 * (-1) ** i
+    return data
+
+
+
+def test_apply_cooldown_blocks_buy_within_window():
+    params = StrategyParams(cooldown_bars=2, bar_minutes=60)
+    base_result = SignalResult(
+        signal=Signal.BUY,
+        reason="macd_cross_up",
+        volatility=0.01,
+        volatility_scale=1.0,
+        macd_hist=0.2,
+        macd_hist_prev=-0.1,
+        adx=25.0,
+        meta={},
+    )
+    now = datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
+    last_exit = now - timedelta(hours=1)
+    gated = apply_cooldown(base_result, params, last_exit_ts=last_exit, current_ts=now)
+    assert gated.signal == Signal.HOLD
+    assert gated.reason == "cooldown_active"
+    assert gated.meta["cooldown_active"] is True
+    assert gated.meta["bars_since_exit"] == 1
+
+
+def test_apply_cooldown_allows_entry_after_window():
+    params = StrategyParams(cooldown_bars=2, bar_minutes=60)
+    base_result = SignalResult(
+        signal=Signal.BUY,
+        reason="macd_cross_up",
+        volatility=0.01,
+        volatility_scale=1.0,
+        macd_hist=0.2,
+        macd_hist_prev=-0.1,
+        adx=25.0,
+        meta={},
+    )
+    now = datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
+    last_exit = now - timedelta(hours=4)
+    allowed = apply_cooldown(base_result, params, last_exit_ts=last_exit, current_ts=now)
+    assert allowed.signal == Signal.BUY
+    assert allowed.meta["cooldown_active"] is False
+
+
+def test_compute_indicators_respects_vol_lookback():
+    noisy = make_noisy_ohlcv(90)
+    params_short = StrategyParams(vol_lookback=5, bar_minutes=60)
+    params_long = StrategyParams(vol_lookback=30, bar_minutes=60)
+    df_short = compute_indicators(noisy, params_short)
+    df_long = compute_indicators(noisy, params_long)
+    assert df_long["realized_vol"].iloc[-1] <= df_short["realized_vol"].iloc[-1]
+
