@@ -5,13 +5,18 @@ import types
 if 'ccxt' not in sys.modules:
     sys.modules['ccxt'] = types.SimpleNamespace()
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+if str(SRC) not in sys.path:
+    sys.path.append(str(SRC))
 
 import pytest
 
-from src.broker import PaperBroker
-from src.config import Settings
-from src.state import StateStore
+from quantbot.broker import PaperBroker
+from quantbot.config import Settings
+from quantbot.state import StateStore
 
 
 def test_candle_lock_idempotent(tmp_path):

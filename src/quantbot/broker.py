@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import ccxt  # type: ignore
 
-from .config import Settings
-from .state import StateStore
+from quantbot.config import Settings
+from quantbot.state import StateStore
 
 
 logger = logging.getLogger(__name__)

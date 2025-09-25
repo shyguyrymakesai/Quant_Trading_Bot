@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from .config import settings
-from .db import init_db, get_recent_trades
+from quantbot.config import settings
+from quantbot.db import init_db, get_recent_trades
 
 app = FastAPI(title="Crypto Momentum Bot Admin")
 

@@ -1,12 +1,12 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import asyncio
 from datetime import datetime
-from .config import settings
-from .data_adapter import fetch_ohlcv
-from .signal_engine import compute_indicators, last_signal, volatility_target_size
-from .execution_adapter import place_order, _exchange_auth, place_signal
-from .db import log_trade
-from .csv_logger import log_paper_trade
+from quantbot.config import settings
+from quantbot.data_adapter import fetch_ohlcv
+from quantbot.signal_engine import compute_indicators, last_signal, volatility_target_size
+from quantbot.execution_adapter import place_order, _exchange_auth, place_signal
+from quantbot.db import log_trade
+from quantbot.csv_logger import log_paper_trade
 
 
 async def tick():
@@ -23,7 +23,7 @@ async def tick():
 
     last_close = float(df["close"].iloc[-1])
     # compute realized vol for sizing
-    from .signal_engine import compute_realized_vol
+    from quantbot.signal_engine import compute_realized_vol
 
     rv = compute_realized_vol(df)
 

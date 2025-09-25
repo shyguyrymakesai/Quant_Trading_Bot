@@ -1,7 +1,12 @@
 from pathlib import Path
 import sys
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+if str(SRC) not in sys.path:
+    sys.path.append(str(SRC))
 
 import pytest
 from datetime import datetime, timedelta, timezone
@@ -9,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from src.strategy_macd import (
+from quantbot.strategy_macd import (
     Signal,
     SignalResult,
     StrategyParams,

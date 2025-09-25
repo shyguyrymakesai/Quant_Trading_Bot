@@ -1,6 +1,6 @@
 import ccxt
 import asyncio
-from .config import settings
+from quantbot.config import settings
 
 def _exchange():
     if settings.exchange.lower() == "binance":

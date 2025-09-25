@@ -1,8 +1,8 @@
 import ccxt
-from .config import settings, get_symbol_params
+from quantbot.config import settings, get_symbol_params
 
 try:
-    from .position_sizing import compute_order_qty
+    from quantbot.position_sizing import compute_order_qty
 except ImportError:  # fallback when run with src on sys.path
     from position_sizing import compute_order_qty
 

@@ -3,7 +3,7 @@ import csv
 from typing import Dict, List
 
 # Reuse project root resolver from config for consistent paths
-from .config import _project_root
+from quantbot.config import _project_root
 
 
 def _logs_dir() -> str:
