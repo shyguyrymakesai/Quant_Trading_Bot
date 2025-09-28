@@ -1,0 +1,42 @@
+{
+  "family": "quant-bot-task",
+  "taskRoleArn": "arn:aws:iam::969932165253:role/quant-bot-task-role",
+  "executionRoleArn": "arn:aws:iam::969932165253:role/quant-bot-exec-role",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "969932165253.dkr.ecr.us-east-1.amazonaws.com/quant-bot-app:latest",
+      "essential": true,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/quant-bot/app",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "environment": [
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "S3_BUCKET_TRADES", "value": "quant-bot-trades-969932165253" },
+        { "name": "TF", "value": "1h" },
+        { "name": "PYTHONPATH", "value": "/app/src" },
+        { "name": "ENV", "value": "live" },
+        { "name": "MODE", "value": "live" },
+        { "name": "DRY_RUN", "value": "false" },
+        { "name": "SYMBOLS", "value": "[\"BTC-USD\",\"ETH-USD\"]" },
+        { "name": "MIN_NOTIONAL_FLOOR", "value": "1" },
+        { "name": "FLAT_ORDER_NOTIONAL", "value": "1" },
+        { "name": "MAKER_ONLY", "value": "true" },
+        { "name": "MAKER_OFFSET", "value": "0.00015" },
+        { "name": "COINBASE_PARAM_PREFIX", "value": "/quant-bot/coinbase" },
+        { "name": "COINBASE_API_MODE", "value": "advanced_trade" }
+      ]
+    }
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512"
+}

@@ -1,0 +1,31 @@
+{
+  "Targets": [
+    {
+      "Id": "run-task",
+      "Arn": "arn:aws:ecs:us-east-1:969932165253:cluster/quant-bot-cluster",
+      "RoleArn": "arn:aws:iam::969932165253:role/quant-bot-events-invoke",
+      "EcsParameters": {
+        "TaskDefinitionArn": "arn:aws:ecs:us-east-1:969932165253:task-definition/quant-bot-task:3",
+        "TaskCount": 1,
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "awsvpcConfiguration": {
+            "Subnets": [
+              "subnet-05a110c1578958b68",
+              "subnet-0bf6067c27c20cafb",
+              "subnet-01312758501d6f5db",
+              "subnet-07ec095ea8d54e24d",
+              "subnet-0d34704fcdcc468a0",
+              "subnet-0331cbfa028bd6b48"
+            ],
+            "SecurityGroups": [],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "PlatformVersion": "LATEST",
+        "EnableECSManagedTags": false,
+        "EnableExecuteCommand": false
+      }
+    }
+  ]
+}

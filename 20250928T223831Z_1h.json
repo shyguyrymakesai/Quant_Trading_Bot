@@ -1,0 +1,72 @@
+{
+  "run_id": "20250928T223831Z_1h",
+  "timestamp": "2025-09-28T22:38:31.106627+00:00",
+  "mode": "paper",
+  "timeframe": "1h",
+  "exchange": "coinbase",
+  "data_provider": "coinbase",
+  "symbols": [
+    {
+      "symbol": "BTC-USD",
+      "candle": "2025-09-28T22:00:00+00:00",
+      "recorded": "2025-09-28T22:38:30.605301+00:00",
+      "cycle_payload": {
+        "cooldown_bars": 4,
+        "equity": 100000.0,
+        "maker_offset": 0.00015,
+        "order": null,
+        "order_plan": null,
+        "parity_ok": false,
+        "price": 111807.01,
+        "reason": "adx_below_threshold",
+        "signal": "HOLD",
+        "signal_meta": {
+          "adx_ok": false,
+          "cooldown_active": false,
+          "cooldown_bars": 4,
+          "cross_down": false,
+          "cross_up": false,
+          "vol_ok": true
+        },
+        "target_fraction": 0.2,
+        "volatility": 0.011670000807970473,
+        "volatility_scale": 1.0
+      }
+    },
+    {
+      "symbol": "ETH-USD",
+      "candle": "2025-09-28T22:00:00+00:00",
+      "recorded": "2025-09-28T22:38:31.103485+00:00",
+      "cycle_payload": {
+        "cooldown_bars": 4,
+        "equity": 100000.0,
+        "maker_offset": 0.00015,
+        "order": null,
+        "order_plan": null,
+        "parity_ok": false,
+        "price": 4113.38,
+        "reason": "adx_below_threshold",
+        "signal": "HOLD",
+        "signal_meta": {
+          "adx_ok": false,
+          "cooldown_active": false,
+          "cooldown_bars": 4,
+          "cross_down": false,
+          "cross_up": false,
+          "vol_ok": true
+        },
+        "target_fraction": 0.1889197517128054,
+        "volatility": 0.02117301109987046,
+        "volatility_scale": 0.944598758564027
+      }
+    }
+  ],
+  "account": {
+    "cash": 100000.0,
+    "equity": 100000.0,
+    "start_cash": 100000.0,
+    "updated": "2025-09-28T22:38:31.102773+00:00"
+  },
+  "recent_orders": [],
+  "state_file": "/app/state/bot_state.json"
+}

@@ -1,0 +1,48 @@
+name: build-and-push-ecr
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - requirements.txt
+      - src/**
+      - config/**
+      - scripts/**
+      - .github/workflows/build-and-push-ecr.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    name: Build and push to Amazon ECR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/quant-bot-app:latest
+            ${{ steps.login-ecr.outputs.registry }}/quant-bot-app:${{ github.sha }}
+          provenance: false

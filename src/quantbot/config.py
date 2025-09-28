@@ -408,7 +408,22 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-settings = Settings(**_flatten_yaml(yaml_cfg))
+def _apply_settings_source(seed: Settings, values: Dict[str, Any], *, respect_env: bool) -> Settings:
+    """Merge a values dict into Settings, optionally preserving env-provided keys."""
+    if not values:
+        return seed
+    if respect_env:
+        skip_keys = seed.model_fields_set
+        updates = {k: v for k, v in values.items() if k not in skip_keys}
+    else:
+        updates = values
+    if not updates:
+        return seed
+    return seed.model_copy(update=updates)
+
+
+_yaml_defaults = _flatten_yaml(yaml_cfg)
+settings = _apply_settings_source(Settings(), _yaml_defaults, respect_env=True)
 
 
 def load_config_file(path: str) -> Settings:
@@ -416,13 +431,13 @@ def load_config_file(path: str) -> Settings:
     Returns a new Settings instance and updates the module-level settings.
     """
     run_cfg = load_yaml_settings(path)
-    # If the file is in the simplified run schema, map it; otherwise assume full config.yaml shape.
     mapped = _apply_run_config(run_cfg)
-    base = _flatten_yaml(yaml_cfg) if not mapped else _flatten_yaml(yaml_cfg) | mapped
-    new = Settings(**base)
+    base = _apply_settings_source(Settings(), _yaml_defaults, respect_env=True)
+    if mapped:
+        base = _apply_settings_source(base, mapped, respect_env=False)
     global settings  # type: ignore
-    settings = new
-    return new
+    settings = base
+    return base
 
 
 def _normalize_symbol_key(symbol: str) -> str:
@@ -485,3 +500,4 @@ def get_symbol_params(symbol_ccxt: str) -> Dict[str, Any]:
     except Exception:
         pass
     return {}
+

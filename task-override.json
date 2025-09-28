@@ -8,6 +8,10 @@
           "value": "live"
         },
         {
+          "name": "MODE",
+          "value": "live"
+        },
+        {
           "name": "PYTHONPATH",
           "value": "/app/src"
         },
@@ -42,6 +46,14 @@
         {
           "name": "AWS_REGION",
           "value": "us-east-1"
+        },
+        {
+          "name": "COINBASE_API_KEY",
+          "value": "organizations/a2213d52-48a3-46e8-85d3-26db74b21127/apiKeys/70d4a0ab-b098-41be-930d-caa7adbd3ca7"
+        },
+        {
+          "name": "COINBASE_SECRET",
+          "value": "MHcCAQEEIJoBs3COt3l1xMCtfdmc00iRqQ6DNGls0Kf7ncNdpDitoAoGCCqGSM49\nAwEHoUQDQgAELySEuCzJD6rEDlGvwbehiAZWp4budjY49sRAvwgasDro80kYT5Ik\nmOD14S8mXHyk6wTehmV8MOjL50Iq6ydCbQ=="
         }
       ]
     }
