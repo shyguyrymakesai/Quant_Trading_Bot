@@ -1,0 +1,79 @@
+name: build-and-push-ecr
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+    # Tweak these paths to match your app’s change surface
+    paths:
+      - 'Dockerfile'
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'src/**'
+      - 'app/**'
+      - '.github/workflows/build-and-push-ecr.yml'
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+
+concurrency:
+  group: build-and-push-ecr-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: '969932165253'
+  ECR_REPO: quant-bot-app
+  IMAGE_URI: 969932165253.dkr.ecr.us-east-1.amazonaws.com/quant-bot-app
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ secrets.AWS_IAM_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # --- classic keys fallback (if not using OIDC) ---
+      - name: Configure AWS credentials (access keys)
+        if: ${{ secrets.AWS_IAM_ROLE_ARN == '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      # --------------------------------------------------
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set tags
+        id: vars
+        run: |
+          echo "sha_tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "latest_tag=latest" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        run: |
+          docker build -t $IMAGE_URI:${{ steps.vars.outputs.sha_tag }} -t $IMAGE_URI:${{ steps.vars.outputs.latest_tag }} .
+          docker push $IMAGE_URI:${{ steps.vars.outputs.sha_tag }}
+          # Only push "latest" on main (manual dispatch also uses checked-out ref)
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            docker push $IMAGE_URI:${{ steps.vars.outputs.latest_tag }}
+          fi
+
+      - name: Output image URIs
+        run: |
+          echo "Pushed:"
+          echo " - $IMAGE_URI:${{ steps.vars.outputs.sha_tag }}"
+          [ "${GITHUB_REF}" = "refs/heads/main" ] && echo " - $IMAGE_URI:${{ steps.vars.outputs.latest_tag }}" || true
