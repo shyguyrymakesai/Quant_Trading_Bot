@@ -21,6 +21,7 @@ from quantbot.broker import BrokerError, BrokerFactory
 import argparse
 from quantbot.config import settings, Settings, get_symbol_params, load_config_file
 from quantbot.state import StateStore
+from quantbot.smart_sizing import build_order_plan
 from quantbot.strategy_macd import (
     Signal,
     SignalResult,
@@ -54,14 +55,60 @@ class DataFetcher:
         else:
             raise ValueError(f"Unsupported data provider: {provider}")
         self.cfg = cfg
-        # In paper mode, avoid authenticated market discovery which may hit private endpoints
-        if cfg.is_live:
-            try:
-                self.exchange.load_markets()
-            except Exception as exc:
-                logger.warning(
-                    "load_markets failed (%s); proceeding without cached markets", exc
-                )
+        self.markets_cache = {}  # Cache for market info (min_market_funds, etc.)
+
+        # Load markets for minimum sizing info (safe for both live and paper mode)
+        try:
+            self.exchange.load_markets()
+            self._cache_market_info()
+        except Exception as exc:
+            logger.warning(
+                "load_markets failed (%s); proceeding without cached markets", exc
+            )
+
+    def _cache_market_info(self) -> None:
+        """Cache exchange minimum requirements for each symbol."""
+        try:
+            for symbol in self.cfg.symbols:
+                ccxt_symbol = self.cfg.as_ccxt_symbol(symbol)
+                if ccxt_symbol in self.exchange.markets:
+                    market = self.exchange.markets[ccxt_symbol]
+                    limits = market.get("limits", {})
+
+                    # Extract market minimums
+                    cost_min = None
+                    amount_min = None
+
+                    if "cost" in limits and limits["cost"].get("min") is not None:
+                        cost_min = float(limits["cost"]["min"])
+                    if "amount" in limits and limits["amount"].get("min") is not None:
+                        amount_min = float(limits["amount"]["min"])
+
+                    # For lot step, get precision info
+                    lot_step = None
+                    if "precision" in market and "amount" in market["precision"]:
+                        # Convert precision to step size (e.g., 5 decimals = 0.00001 step)
+                        amount_precision = market["precision"]["amount"]
+                        if isinstance(amount_precision, int) and amount_precision > 0:
+                            lot_step = 10 ** (-amount_precision)
+
+                    self.markets_cache[symbol] = {
+                        "min_market_funds": cost_min,  # minimum notional USD
+                        "min_qty": amount_min,  # minimum base asset quantity
+                        "lot_step": lot_step,  # quantity step size
+                        "ccxt_symbol": ccxt_symbol,
+                    }
+
+                    logger.info(
+                        f"Cached market info for {symbol}: min_funds=${cost_min}, "
+                        f"min_qty={amount_min}, lot_step={lot_step}"
+                    )
+        except Exception as exc:
+            logger.warning(f"Failed to cache market info: {exc}")
+
+    def get_market_info(self, symbol: str) -> Dict:
+        """Get cached market info for a symbol."""
+        return self.markets_cache.get(symbol, {})
 
     def fetch(self, symbol: str, timeframe: str, limit: int) -> List[List[float]]:
         market_symbol = self.cfg.as_ccxt_symbol(symbol)
@@ -483,39 +530,34 @@ class BotDaemon:
                     self.risk_frac * signal_result.volatility_scale,
                 ),
             )
-            leverage = self.cfg.max_leverage if self.cfg.max_leverage > 0 else 1.0
-            target_notional = equity * target_fraction * leverage
-            target_qty = target_notional / last_price if last_price > 0 else 0.0
-            if signal_result.signal == Signal.SELL:
-                target_qty = 0.0
-            elif signal_result.signal == Signal.HOLD:
-                target_qty = current_qty
-            delta_qty = target_qty - current_qty
-            min_qty = max(self.cfg.min_order_qty, 1e-8)
-            order_info: Optional[Dict[str, object]] = None
-            order_plan: Optional[Dict[str, object]] = None
-            side = ""
-            order_qty = 0.0
-            if signal_result.signal == Signal.BUY:
-                side = "buy"
-                order_qty = max(0.0, delta_qty)
-                order_plan = self._order_plan(side, order_qty, last_price, last_price)
-            elif signal_result.signal == Signal.SELL:
-                side = "sell"
-                order_qty = max(0.0, -delta_qty)
-                order_plan = self._order_plan(side, order_qty, last_price, last_price)
 
-            if (
-                order_plan
-                and order_qty >= min_qty
-                and signal_result.signal != Signal.HOLD
-            ):
-                order_id = _make_order_id(symbol, candle_key, side, order_qty)
+            # Get exchange-specific market info for smart sizing
+            market_info = self.data.get_market_info(symbol)
+
+            # Use smart sizing with dynamic exchange minimums
+            order_plan = build_order_plan(
+                signal=signal_result.signal.value,
+                symbol=symbol,
+                equity_usd=equity,
+                target_fraction=target_fraction,
+                price=last_price,
+                lot_step=market_info.get("lot_step"),
+                min_qty=market_info.get("min_qty"),
+                exch_min_notional=market_info.get("min_market_funds"),
+            )
+
+            order_info: Optional[Dict[str, object]] = None
+            delta_qty = 0.0
+
+            if order_plan and signal_result.signal != Signal.HOLD:
+                order_id = _make_order_id(
+                    symbol, candle_key, order_plan["side"], order_plan["qty"]
+                )
                 try:
                     response = self._place_order_with_retry(
                         symbol,
-                        side,
-                        order_qty,
+                        order_plan["side"],
+                        order_plan["qty"],
                         order_plan,
                         order_id,
                         last_close.isoformat(),
@@ -525,16 +567,21 @@ class BotDaemon:
                     action_meta = dict(order_plan)
                     if isinstance(order_info, dict):
                         action_meta.update(order_info)
-                    action_meta["qty"] = order_qty
-                    if side.lower() == "sell":
+                    action_meta["qty"] = order_plan["qty"]
+                    if order_plan["side"].lower() == "sell":
                         action_meta.setdefault("last_exit_ts", last_close.isoformat())
                     self.state.set_last_action(
                         symbol,
-                        side.upper(),
+                        order_plan["side"].upper(),
                         ts=last_close.isoformat(),
                         order_id=response.order_id,
                         meta=action_meta,
                     )
+                    # Calculate delta_qty for logging
+                    if order_plan["side"].lower() == "buy":
+                        delta_qty = order_plan["qty"]
+                    else:
+                        delta_qty = -order_plan["qty"]
                 except BrokerError as exc:
                     logger.error("Order failure for %s: %s", symbol, exc)
             else:

@@ -1,10 +1,21 @@
 data "aws_caller_identity" "me" {}
 data "aws_region" "current" {}
 
+locals {
+  merged_env = merge(
+    { AWS_REGION = var.region },
+    var.container_env,
+    { S3_BUCKET_TRADES = aws_s3_bucket.trades.bucket }
+  )
+}
+
 # Use default VPC + its default subnets (keeps cost low, no NAT)
 data "aws_vpc" "default" { default = true }
 data "aws_subnets" "default" {
-  filter { name = "vpc-id" values = [data.aws_vpc.default.id] }
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
 
 # ECR repo for your image
@@ -30,7 +41,10 @@ resource "aws_s3_bucket" "trades" {
 data "aws_iam_policy_document" "assume_ecs" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { type = "Service" identifiers = ["ecs-tasks.amazonaws.com"] }
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
   }
 }
 
@@ -87,9 +101,7 @@ resource "aws_ecs_task_definition" "app" {
     name      = "app"
     image     = "${aws_ecr_repository.repo.repository_url}:latest"
     essential = true
-    environment = [
-      for k, v in var.container_env : { name = k, value = v }
-    ]
+    environment = [for k, v in local.merged_env : { name = k, value = v }]
     logConfiguration = {
       logDriver = "awslogs",
       options = {
@@ -99,6 +111,35 @@ resource "aws_ecs_task_definition" "app" {
       }
     }
   }])
+}
+
+# Allow reading Coinbase SSM parameters
+data "aws_iam_policy_document" "ssm_read" {
+  statement {
+    actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.me.account_id}:parameter/quant-bot/coinbase/*"
+    ]
+  }
+  statement {
+    actions   = ["kms:Decrypt"]
+    resources = ["*"] # default AWS managed key for SSM
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.name}.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "ssm_read" {
+  name   = "${var.project}-ssm-read"
+  policy = data.aws_iam_policy_document.ssm_read.json
+}
+
+resource "aws_iam_role_policy_attachment" "task_ssm_attach" {
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.ssm_read.arn
 }
 
 # EventBridge schedule → run Fargate task
@@ -133,15 +174,16 @@ resource "aws_cloudwatch_event_target" "run_task" {
   arn       = aws_ecs_cluster.this.arn
   role_arn  = aws_iam_role.events_invoke.arn
 
-  ecs_target = {
-    taskDefinitionArn = aws_ecs_task_definition.app.arn
-    launchType        = "FARGATE"
-    platformVersion   = "LATEST"
-    networkConfiguration = {
-      awsvpcConfiguration = {
-        assignPublicIp = "ENABLED"
-        subnets        = data.aws_subnets.default.ids
-      }
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.app.arn
+    launch_type         = "FARGATE"
+    platform_version    = "LATEST"
+    task_count          = 1
+
+    network_configuration {
+      subnets          = data.aws_subnets.default.ids
+      assign_public_ip = true
+      # security_groups = []  # optional
     }
   }
 }

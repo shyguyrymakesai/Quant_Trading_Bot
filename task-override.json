@@ -1,0 +1,49 @@
+{
+  "containerOverrides": [
+    {
+      "name": "app",
+      "environment": [
+        {
+          "name": "ENV",
+          "value": "live"
+        },
+        {
+          "name": "PYTHONPATH",
+          "value": "/app/src"
+        },
+        {
+          "name": "SYMBOLS",
+          "value": "[\"BTC-USD\",\"ETH-USD\"]"
+        },
+        {
+          "name": "MIN_NOTIONAL_FLOOR",
+          "value": "1"
+        },
+        {
+          "name": "FLAT_ORDER_NOTIONAL",
+          "value": "1"
+        },
+        {
+          "name": "MAKER_ONLY",
+          "value": "true"
+        },
+        {
+          "name": "MAKER_OFFSET",
+          "value": "0.00015"
+        },
+        {
+          "name": "COINBASE_PARAM_PREFIX",
+          "value": "/quant-bot/coinbase"
+        },
+        {
+          "name": "COINBASE_API_MODE",
+          "value": "advanced_trade"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "us-east-1"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1
+FROM 969932165253.dkr.ecr.us-east-1.amazonaws.com/quant-bot-app:latest
+
+# Copy updated files
+COPY src/run_once.py ./src/run_once.py
+COPY config/ ./config/
+
+# Set PYTHONPATH so imports work
+ENV PYTHONPATH="/app/src:/app"
+
+# run one cycle then exit
+ENTRYPOINT ["python", "-m", "src.run_once"]

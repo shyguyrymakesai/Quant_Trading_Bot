@@ -2,7 +2,7 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH="/app/src"
 
 # (optional) build deps if your libs need it
 RUN apt-get update \
@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # app
 COPY src/ ./src/
+COPY config/ ./config/
 
 # run one cycle then exit (cheap Fargate runs)
 ENTRYPOINT ["python", "-m", "src.run_once"]

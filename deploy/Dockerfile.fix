@@ -1,0 +1,5 @@
+# Use existing image as base
+FROM 969932165253.dkr.ecr.us-east-1.amazonaws.com/quant-bot-app:latest
+
+# Just fix the Python path so imports work correctly
+ENV PYTHONPATH="/app/src"

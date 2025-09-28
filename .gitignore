@@ -170,6 +170,11 @@ docker-compose.override.yml
 terraform.tfstate*
 .terraform/
 
+# Allow committing our Terraform infra code but keep state hidden
+!infra/**
+infra/.terraform/
+infra/terraform.tfstate*
+
 # =============================================================================
 # MONITORING & ANALYTICS
 # =============================================================================

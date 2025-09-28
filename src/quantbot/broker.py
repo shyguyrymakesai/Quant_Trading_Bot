@@ -10,6 +10,7 @@ import ccxt  # type: ignore
 
 from quantbot.config import Settings
 from quantbot.state import StateStore
+from quantbot.creds import get_live_credentials
 
 
 logger = logging.getLogger(__name__)
@@ -133,7 +134,9 @@ class PaperBroker(BaseBroker):
             if side.lower() == "sell":
                 payload.setdefault("last_exit_ts", ts)
             self.state.record_order(client_order_id, payload)
-            self.state.set_last_action(symbol, side.upper(), ts=ts, order_id=client_order_id, meta=payload)
+            self.state.set_last_action(
+                symbol, side.upper(), ts=ts, order_id=client_order_id, meta=payload
+            )
             return OrderResponse(
                 order_id=client_order_id,
                 symbol=symbol,
@@ -169,7 +172,9 @@ class PaperBroker(BaseBroker):
                 "filled_qty": 0.0,
             }
             self.state.record_order(client_order_id, payload)
-            self.state.set_last_action(symbol, "REJECT", ts=ts, order_id=client_order_id, meta=payload)
+            self.state.set_last_action(
+                symbol, "REJECT", ts=ts, order_id=client_order_id, meta=payload
+            )
             return OrderResponse(
                 order_id=client_order_id,
                 symbol=symbol,
@@ -219,7 +224,9 @@ class PaperBroker(BaseBroker):
         if side.lower() == "sell":
             payload.setdefault("last_exit_ts", ts)
         self.state.record_order(client_order_id, payload)
-        self.state.set_last_action(symbol, side.upper(), ts=ts, order_id=client_order_id, meta=payload)
+        self.state.set_last_action(
+            symbol, side.upper(), ts=ts, order_id=client_order_id, meta=payload
+        )
         return OrderResponse(
             order_id=client_order_id,
             symbol=symbol,
@@ -242,23 +249,34 @@ class LiveBroker(BaseBroker):
 
     def __init__(self, cfg: Settings) -> None:
         self.settings = cfg
+
+        # Load live credentials from SSM or environment
+        creds = get_live_credentials()
+
         exchange_name = (cfg.exchange or cfg.data_provider or "binance").lower()
         if exchange_name == "binance":
-            self.exchange = ccxt.binance({
-                "apiKey": cfg.live_api_key or cfg.binance_key,
-                "secret": cfg.live_api_secret or cfg.binance_secret,
-                "enableRateLimit": True,
-                "options": {"defaultType": "spot"},
-            })
+            self.exchange = ccxt.binance(
+                {
+                    "apiKey": creds["live_api_key"] or cfg.binance_key,
+                    "secret": creds["live_api_secret"] or cfg.binance_secret,
+                    "enableRateLimit": True,
+                    "options": {"defaultType": "spot"},
+                }
+            )
             if cfg.live_base_url:
-                self.exchange.urls["api"] = {"public": cfg.live_base_url, "private": cfg.live_base_url}
+                self.exchange.urls["api"] = {
+                    "public": cfg.live_base_url,
+                    "private": cfg.live_base_url,
+                }
         elif exchange_name in {"coinbase", "coinbaseadvanced"}:
-            self.exchange = ccxt.coinbaseadvanced({
-                "apiKey": cfg.live_api_key or cfg.coinbase_key,
-                "secret": cfg.live_api_secret or cfg.coinbase_secret,
-                "password": cfg.live_api_passphrase or cfg.coinbase_passphrase,
-                "enableRateLimit": True,
-            })
+            self.exchange = ccxt.coinbaseadvanced(
+                {
+                    "apiKey": creds["live_api_key"] or cfg.coinbase_key,
+                    "secret": creds["live_api_secret"] or cfg.coinbase_secret,
+                    "password": creds["live_api_passphrase"] or cfg.coinbase_passphrase,
+                    "enableRateLimit": True,
+                }
+            )
             if cfg.live_base_url:
                 self.exchange.urls["api"] = cfg.live_base_url
         else:
@@ -303,7 +321,9 @@ class LiveBroker(BaseBroker):
         if reduce_only:
             params["reduceOnly"] = True
         ccxt_price = price if order_type.lower() != "market" else None
-        order = self.exchange.create_order(market_symbol, order_type, side, qty, ccxt_price, params)
+        order = self.exchange.create_order(
+            market_symbol, order_type, side, qty, ccxt_price, params
+        )
         ts = timestamp or str(order.get("datetime") or _utcnow())
         return OrderResponse(
             order_id=str(order.get("id") or client_order_id or uuid4().hex),
