@@ -14,8 +14,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 USE_TALIB = True
 import talib
 
-# Fast sweep toggle
-FAST_MODE = True  # flip to False for full sweep
+# Fast/targeted sweep toggle
+FAST_MODE = True  # keep True to run the lean targeted sweep described below
+
+# Optional environment toggles for data/filters
+PREFER_YF = os.environ.get("SWEEP_PREFER_YF", "0") == "1"
+YF_MAX_DAYS = int(os.environ.get("SWEEP_YF_DAYS", "720"))  # clamp handled below
+ENV_MIN_TRADES = os.environ.get("SWEEP_MIN_TRADES")  # if set, overrides default
+ENV_MIN_OOS_SHARPE = os.environ.get("SWEEP_MIN_OOS_SHARPE")  # if set, overrides default
 
 
 def _parse_period_days(period: str | int | None) -> int:
@@ -44,7 +50,9 @@ def suppress_sortino_runtimewarnings():
 
 
 def _download_yf_hourly(symbol: str, total_days: int) -> pd.DataFrame:
-    days = max(1, min(int(total_days), 720))
+    # yfinance limit ~2 years hourly; clamp to env-configured max
+    cap = max(1, int(YF_MAX_DAYS))
+    days = max(1, min(int(total_days), cap))
     df = yf.download(
         symbol,
         interval="1h",
@@ -63,18 +71,8 @@ def load_df(symbol="BTC-USD", timeframe="1h", period="1825d", limit=1000):
     Resample locally to 4h if requested.
     symbol: "BTC-USD" / "ETH-USD" / "SOL-USD"
     """
-    # --- try coinbase (1h only) ---
-    try:
-        ex = ccxt.coinbaseadvanced({"enableRateLimit": True, "timeout": 90000})
-        raw = ex.fetch_ohlcv(symbol.replace("-", "/"), timeframe="1h", limit=limit)
-        df = pd.DataFrame(
-            raw, columns=["Date", "Open", "High", "Low", "Close", "Volume"]
-        )
-        df["Date"] = pd.to_datetime(df["Date"], unit="ms", utc=True)
-        df.set_index("Date", inplace=True)
-        df = df.astype(float)
-    except Exception as e:
-        print(f"[WARN] Coinbase fetch failed ({e}); using yfinance {symbol}...")
+    # --- prefer yfinance if requested, else try coinbase then fallback ---
+    if PREFER_YF:
         total_days = _parse_period_days(period)
         df = _download_yf_hourly(symbol, total_days)
         if df.empty:
@@ -84,6 +82,27 @@ def load_df(symbol="BTC-USD", timeframe="1h", period="1825d", limit=1000):
         else:
             df.index = df.index.tz_convert("UTC")
         df = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
+    else:
+        try:
+            ex = ccxt.coinbaseadvanced({"enableRateLimit": True, "timeout": 90000})
+            raw = ex.fetch_ohlcv(symbol.replace("-", "/"), timeframe="1h", limit=limit)
+            df = pd.DataFrame(
+                raw, columns=["Date", "Open", "High", "Low", "Close", "Volume"]
+            )
+            df["Date"] = pd.to_datetime(df["Date"], unit="ms", utc=True)
+            df.set_index("Date", inplace=True)
+            df = df.astype(float)
+        except Exception as e:
+            print(f"[WARN] Coinbase fetch failed ({e}); using yfinance {symbol}...")
+            total_days = _parse_period_days(period)
+            df = _download_yf_hourly(symbol, total_days)
+            if df.empty:
+                raise RuntimeError(f"No data from yfinance for {symbol}")
+            if getattr(df.index, "tz", None) is None:
+                df.index = df.index.tz_localize("UTC")
+            else:
+                df.index = df.index.tz_convert("UTC")
+            df = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
 
     if timeframe == "4h":
         o = df["Open"].resample("4h").first()
@@ -128,6 +147,8 @@ class Strat(Strategy):
     target_vol = 0.02
     size_min = 0.0
     size_max = 1.0
+    # Exit cool-down in bars: after closing a position, wait N bars before re-entering
+    exit_cooldown = 0
 
     def init(self):
         price_series = pd.Series(self.data.Close).astype(float)
@@ -152,6 +173,8 @@ class Strat(Strategy):
         self.realized_vol = self.I(
             lambda: rets.rolling(self.vol_lb).std().values, name="realized_vol"
         )
+        # Internal cool-down counter
+        self._cooldown_ctr = 0
 
     def position_size_scale(self):
         vol = self.realized_vol[-1]
@@ -186,16 +209,34 @@ class Strat(Strategy):
         if units < 1:
             units = 1
 
-        if crossed_up:
+        # decrement cool-down if active
+        if self._cooldown_ctr > 0:
+            self._cooldown_ctr -= 1
+
+        # If signal flips, always close first and start cool-down
+        if crossed_up and self.position.is_short:
             self.position.close()
+            self._cooldown_ctr = int(self.exit_cooldown)
+            return  # no immediate re-entry on the same bar
+        if crossed_down and self.position.is_long:
+            self.position.close()
+            self._cooldown_ctr = int(self.exit_cooldown)
+            return  # no immediate re-entry on the same bar
+
+        # Respect cool-down before new entries
+        if self._cooldown_ctr > 0:
+            return
+
+        # Entries from flat or aligned with signal
+        if crossed_up and not self.position:
             self.buy(size=units)
-        elif crossed_down:
-            self.position.close()
+        elif crossed_down and not self.position:
             self.sell(size=units)
 
 
 def eval_combo(args):
-    sym, tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol = args
+    sym, tf, macd_tuple, adx_thr, vol_lb, tgt_vol, exit_cd = args
+    mf, ms, sig = macd_tuple
     df = get_df(sym, tf)
     params = dict(
         macd_fast=mf,
@@ -205,7 +246,9 @@ def eval_combo(args):
         adx_threshold=adx_thr,
         vol_lb=vol_lb,
         target_vol=tgt_vol,
+        exit_cooldown=exit_cd,
     )
+    # Commission approximates maker-only entries + market exits + light slippage
     is_stats, oos_stats = run_split_backtest(df, params, commission=0.0012)
     return {
         "symbol": sym,
@@ -214,6 +257,7 @@ def eval_combo(args):
         "adx_thr": adx_thr,
         "vol_lb": vol_lb,
         "tgt_vol": tgt_vol,
+        "exit_cd": exit_cd,
         "IS_Sharpe": float(is_stats["Sharpe Ratio"]),
         "IS_MaxDD": float(is_stats["Max. Drawdown [%]"]),
         "IS_Trades": int(is_stats["# Trades"]),
@@ -231,7 +275,7 @@ def run_split_backtest(df, params, commission=0.0012):
         Strat,
         cash=10_000,
         commission=commission,
-        trade_on_close=True,
+        trade_on_close=True,  # approximates market timing; maker-only entries cannot be modeled per-order here
         exclusive_orders=True,
     )
     bt_oos = Backtest(
@@ -296,14 +340,20 @@ def walk_forward_scores(df, params, n_folds=4, commission=0.0012):
 def main():
     # Grids: slim in FAST_MODE, full otherwise
     if FAST_MODE:
+        # Targeted sweep per request:
+        # Symbols/TF: BTC-USD, ETH-USD, 1h
+        # MACD sets: (8,24,9), (5,24,9), (8,24,5)
+        # ADX threshold: 20, 25, 30
+        # Vol lookback: 20, 30
+        # Target vol: 0.015, 0.020
+        # Exit cool-down (bars): 0, 4, 6
         grids = {
             "timeframe": ["1h"],
-            "macd_fast": [5, 8, 10],
-            "macd_slow": [24, 30, 35],
-            "macd_signal": [5, 9],
-            "adx_threshold": [0, 10, 20],
+            "macd_sets": [(8, 24, 9), (5, 24, 9), (8, 24, 5)],
+            "adx_threshold": [20, 25, 30],
             "vol_lb": [20, 30],
-            "target_vol": [0.02, 0.05],
+            "target_vol": [0.015, 0.020],
+            "exit_cd": [0, 4, 6],
         }
     else:
         grids = {
@@ -316,17 +366,29 @@ def main():
             "target_vol": [0.02, 0.03, 0.05, 0.10],
         }
 
-    combos = list(
-        itertools.product(
-            grids["timeframe"],
-            grids["macd_fast"],
-            grids["macd_slow"],
-            grids["macd_signal"],
-            grids["adx_threshold"],
-            grids["vol_lb"],
-            grids["target_vol"],
+    if FAST_MODE:
+        combos = list(
+            itertools.product(
+                grids["timeframe"],
+                grids["macd_sets"],
+                grids["adx_threshold"],
+                grids["vol_lb"],
+                grids["target_vol"],
+                grids["exit_cd"],
+            )
         )
-    )
+    else:
+        combos = list(
+            itertools.product(
+                grids["timeframe"],
+                grids["macd_fast"],
+                grids["macd_slow"],
+                grids["macd_signal"],
+                grids["adx_threshold"],
+                grids["vol_lb"],
+                grids["target_vol"],
+            )
+        )
 
     symbols = (
         ["BTC-USD", "ETH-USD"]
@@ -337,8 +399,12 @@ def main():
     # Prepare jobs for parallel execution
     jobs = []
     for sym in symbols:
-        for tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol in combos:
-            jobs.append((sym, tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol))
+        if FAST_MODE:
+            for tf, macd_set, adx_thr, vol_lb, tgt_vol, exit_cd in combos:
+                jobs.append((sym, tf, macd_set, adx_thr, vol_lb, tgt_vol, exit_cd))
+        else:
+            for tf, mf, ms, sig, adx_thr, vol_lb, tgt_vol in combos:
+                jobs.append((sym, tf, (mf, ms, sig), adx_thr, vol_lb, tgt_vol, 0))
 
     results = []
     workers = (
@@ -353,14 +419,22 @@ def main():
             r = f.result()
             results.append(r)
             print(
-                f"Done {r['symbol']} {r['tf']} MACD {r['macd']} ADX>{r['adx_thr']} vol_lb={r['vol_lb']} tgt={r['tgt_vol']}"
+                f"Done {r['symbol']} {r['tf']} MACD {r['macd']} ADX>{r['adx_thr']} vol_lb={r['vol_lb']} tgt={r['tgt_vol']} cd={r['exit_cd']}"
             )
 
     out = pd.DataFrame(results)
 
     # Minimum trades filter to avoid spurious Sharpe from tiny samples
-    MIN_TRADES = 20 if FAST_MODE else 30  # require >=X IS and OOS trades
-    MIN_OOS_SHARPE = 0.5  # early prune threshold for WFV candidates
+    # Filters (overridable via env vars for quick exploration)
+    MIN_TRADES = (
+        int(ENV_MIN_TRADES)
+        if (ENV_MIN_TRADES and ENV_MIN_TRADES.isdigit())
+        else (20 if FAST_MODE else 30)
+    )  # require >=X IS and OOS trades
+    try:
+        MIN_OOS_SHARPE = float(ENV_MIN_OOS_SHARPE) if ENV_MIN_OOS_SHARPE else 0.5
+    except ValueError:
+        MIN_OOS_SHARPE = 0.5
     out_f = out[
         (out["OOS_Trades"] >= MIN_TRADES) & (out["IS_Trades"] >= MIN_TRADES)
     ].copy()
@@ -409,6 +483,7 @@ def main():
                 adx_threshold=int(row["adx_thr"]),
                 vol_lb=int(row["vol_lb"]),
                 target_vol=float(row["tgt_vol"]),
+                exit_cooldown=int(row.get("exit_cd", 0)),
             )
             avg_oos, oos_tr = walk_forward_scores(
                 df_tf, params, n_folds=n_folds, commission=0.0012
