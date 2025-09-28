@@ -9,7 +9,7 @@ import boto3
 BUCKET = os.environ.get("S3_BUCKET_TRADES", "")
 SYMBOLS = os.environ.get("SYMBOLS", "BTC-USD,ETH-USD").split(",")
 TF = os.environ.get("TF", "1h")
-REGION = os.environ.get("AWS_REGION", "us-east-2")
+REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 
 def run_bot_once() -> int:
@@ -25,10 +25,16 @@ def run_bot_once() -> int:
         )
 
     key = f"runs/{now.replace(':','').replace('-','')}_{TF}.json"
-    body = json.dumps({"ts": now, "symbols": SYMBOLS, "tf": TF, "results": results}, indent=2)
+    body = json.dumps(
+        {"ts": now, "symbols": SYMBOLS, "tf": TF, "results": results}, indent=2
+    )
     s3 = boto3.client("s3", region_name=REGION)
     s3.put_object(Bucket=BUCKET, Key=key, Body=body.encode("utf-8"))
-    print(json.dumps({"level": "info", "msg": "wrote run artifact", "bucket": BUCKET, "key": key}))
+    print(
+        json.dumps(
+            {"level": "info", "msg": "wrote run artifact", "bucket": BUCKET, "key": key}
+        )
+    )
     return 0
 
 
