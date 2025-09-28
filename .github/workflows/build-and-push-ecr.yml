@@ -32,31 +32,48 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
+    # expose secrets as env so we can use env.* in `if:` safely
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: '969932165253'
+      ECR_REPO: quant-bot-app
+      IMAGE_URI: 969932165253.dkr.ecr.us-east-1.amazonaws.com/quant-bot-app
+      AWS_IAM_ROLE_ARN: ${{ secrets.AWS_IAM_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --- OIDC path (preferred) ---
       - name: Configure AWS credentials (OIDC)
-        if: ${{ secrets.AWS_IAM_ROLE_ARN != '' }}
+        if: ${{ env.AWS_IAM_ROLE_ARN != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_IAM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --- classic keys fallback (if not using OIDC) ---
+      # --- classic keys fallback ---
       - name: Configure AWS credentials (access keys)
-        if: ${{ secrets.AWS_IAM_ROLE_ARN == '' }}
+        if: ${{ env.AWS_IAM_ROLE_ARN == '' && env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      # --------------------------------------------------
+
+      # --- helpful failure if neither path is configured ---
+      - name: Fail if no AWS credentials provided
+        if: ${{ env.AWS_IAM_ROLE_ARN == '' && (env.AWS_ACCESS_KEY_ID == '' || env.AWS_SECRET_ACCESS_KEY == '') }}
+        run: |
+          echo "No AWS credentials available. Set AWS_IAM_ROLE_ARN for OIDC or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for classic keys." >&2
+          exit 1
 
       - name: Log in to Amazon ECR
-        id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
+        # keep the rest of your steps the same:
       - name: Set tags
         id: vars
         run: |
@@ -67,7 +84,6 @@ jobs:
         run: |
           docker build -t $IMAGE_URI:${{ steps.vars.outputs.sha_tag }} -t $IMAGE_URI:${{ steps.vars.outputs.latest_tag }} .
           docker push $IMAGE_URI:${{ steps.vars.outputs.sha_tag }}
-          # Only push "latest" on main (manual dispatch also uses checked-out ref)
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             docker push $IMAGE_URI:${{ steps.vars.outputs.latest_tag }}
           fi
