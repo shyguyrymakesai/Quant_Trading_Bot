@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1
 
-# Skip TA-Lib - using pandas-ta for pure Python indicators
+# Add build dependencies for pandas-ta compilation
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
