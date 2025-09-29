@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 from quantbot.config import settings, get_symbol_params
+from quantbot.signal_utils import safe_float, safe_tail
 
 
 def _resolve_symbol(symbol: Optional[str]) -> str:
@@ -62,11 +63,12 @@ def volatility_target_size(df: pd.DataFrame, *, symbol: Optional[str] = None):
 
 
 def last_signal(df: pd.DataFrame, *, symbol: Optional[str] = None):
-    if df is None or df.empty or len(df) < 2:
+    tail = safe_tail(df, 2) if df is not None else pd.DataFrame()
+    if tail.empty or len(tail) < 2:
         return "hold"
 
-    row = df.iloc[-1]
-    prev = df.iloc[-2]
+    row = tail.iloc[-1]
+    prev = tail.iloc[-2]
     eff_symbol = _resolve_symbol(symbol)
     sym_params = get_symbol_params(eff_symbol)
     adx_thr = int(
@@ -77,26 +79,24 @@ def last_signal(df: pd.DataFrame, *, symbol: Optional[str] = None):
     adx_value = row.get("adx")
     if adx_value is None or pd.isna(adx_value):
         adx_value = row.get("ADX")
-    if adx_value is None or pd.isna(adx_value):
+    adx_value = safe_float(adx_value)
+    if np.isnan(adx_value):
         return "hold"
-    adx_ok = float(adx_value) > adx_thr
+    adx_ok = adx_value > adx_thr
 
     # MACD histogram cross as signal (pandas-ta column)
-    def _get_hist(source_row: pd.Series) -> Optional[float]:
-        value = source_row.get("MACD_hist")
-        if value is None or pd.isna(value):
-            value = source_row.get("macd_hist")
-        if value is None or pd.isna(value):
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
+    def _get_hist(source_row: pd.Series) -> float:
+        for key in ("MACD_hist", "macd_hist"):
+            if key in source_row:
+                value = safe_float(source_row.get(key))
+                if not np.isnan(value):
+                    return value
+        return float("nan")
 
     macd_hist = _get_hist(row)
     macd_hist_prev = _get_hist(prev)
 
-    if adx_ok and macd_hist is not None and macd_hist_prev is not None:
+    if adx_ok and not np.isnan(macd_hist) and not np.isnan(macd_hist_prev):
         if macd_hist > 0 and macd_hist_prev <= 0:
             return "buy"
         if macd_hist < 0 and macd_hist_prev >= 0:

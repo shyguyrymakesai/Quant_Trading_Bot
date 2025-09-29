@@ -23,6 +23,7 @@ from quantbot.strategy_macd import (
     compute_signal,
     position_sizer,
 )
+from quantbot.signal_utils import bars_needed_contract, validate_window
 
 
 def make_dummy_ohlcv(periods: int = 60):
@@ -152,6 +153,86 @@ def make_noisy_ohlcv(periods: int = 60):
         data.append([int(ts.timestamp() * 1000), price, high, low, close, 15.0])
         base += 0.2 * (-1) ** i
     return data
+
+
+def test_validate_window_short_history_under_warmup():
+    params = StrategyParams(bar_minutes=30)
+    df = compute_indicators(make_dummy_ohlcv(periods=10), params)
+    min_bars = bars_needed_contract(
+        macd_fast=params.macd_fast,
+        macd_slow=params.macd_slow,
+        macd_signal=params.macd_signal,
+        adx_length=params.adx_length,
+        vol_lookback=params.vol_lookback,
+        macd_cross_grace_bars=params.macd_cross_grace_bars,
+        macd_thrust_bars=params.macd_thrust_bars,
+    )
+    status = validate_window(
+        df,
+        min_bars=min_bars,
+        as_of=df.index[-1].to_pydatetime() + timedelta(minutes=params.bar_minutes),
+        bar_minutes=params.bar_minutes,
+        required_columns=["macd_hist", "adx", "realized_vol"],
+    )
+    assert status.ok is False
+    assert status.reason == "insufficient_bars"
+
+
+def test_validate_window_detects_partial_bar():
+    params = StrategyParams(bar_minutes=30)
+    df = compute_indicators(make_dummy_ohlcv(periods=80), params)
+    min_bars = bars_needed_contract(
+        macd_fast=params.macd_fast,
+        macd_slow=params.macd_slow,
+        macd_signal=params.macd_signal,
+        adx_length=params.adx_length,
+        vol_lookback=params.vol_lookback,
+        macd_cross_grace_bars=params.macd_cross_grace_bars,
+        macd_thrust_bars=params.macd_thrust_bars,
+    )
+    as_of = df.index[-1].to_pydatetime() + timedelta(minutes=5)
+    status = validate_window(
+        df,
+        min_bars=min_bars,
+        as_of=as_of,
+        bar_minutes=params.bar_minutes,
+        required_columns=["macd_hist", "adx", "realized_vol"],
+    )
+    assert status.ok is False
+    assert status.reason == "partial_bar"
+
+
+def test_validate_window_rejects_nan_tail():
+    params = StrategyParams(bar_minutes=30)
+    df = compute_indicators(make_dummy_ohlcv(periods=120), params)
+    df.loc[df.index[-1], "macd_hist"] = np.nan
+    df.loc[df.index[-1], "adx"] = np.nan
+    min_bars = bars_needed_contract(
+        macd_fast=params.macd_fast,
+        macd_slow=params.macd_slow,
+        macd_signal=params.macd_signal,
+        adx_length=params.adx_length,
+        vol_lookback=params.vol_lookback,
+        macd_cross_grace_bars=params.macd_cross_grace_bars,
+        macd_thrust_bars=params.macd_thrust_bars,
+    )
+    status = validate_window(
+        df,
+        min_bars=min_bars,
+        as_of=df.index[-1].to_pydatetime() + timedelta(minutes=params.bar_minutes),
+        bar_minutes=params.bar_minutes,
+        required_columns=["macd_hist", "adx", "realized_vol"],
+    )
+    assert status.ok is False
+    assert status.reason == "indicators_not_ready"
+
+
+def test_compute_signal_parity_on_snapshot():
+    params = StrategyParams()
+    df = compute_indicators(make_noisy_ohlcv(periods=120), params)
+    result = compute_signal(df, params, position_state="FLAT")
+    assert result.signal == Signal.BUY
+    assert result.reason == "macd_cross_recent"
 
 
 def test_apply_cooldown_blocks_buy_within_window():

@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
+from quantbot.signal_utils import safe_float, safe_tail
+
 
 @dataclass
 class StrategyParams:
@@ -200,12 +202,26 @@ def compute_signal(
             adx=0.0,
             meta={"adx_ok": False, "vol_ok": False},
         )
-    row = df.iloc[-1]
-    prev = df.iloc[-2]
-    hist = float(row.get("macd_hist", np.nan))
-    hist_prev = float(prev.get("macd_hist", np.nan))
-    adx = float(row.get("adx", np.nan))
-    realized_vol = float(row.get("realized_vol", np.nan))
+
+    tail = safe_tail(df, 2)
+    if tail.empty or len(tail) < 2:
+        return SignalResult(
+            signal=Signal.HOLD,
+            reason="insufficient_data",
+            volatility=0.0,
+            volatility_scale=0.0,
+            macd_hist=0.0,
+            macd_hist_prev=0.0,
+            adx=0.0,
+            meta={"adx_ok": False, "vol_ok": False},
+        )
+
+    row = tail.iloc[-1]
+    prev = tail.iloc[-2]
+    hist = safe_float(row.get("macd_hist", np.nan))
+    hist_prev = safe_float(prev.get("macd_hist", np.nan))
+    adx = safe_float(row.get("adx", np.nan))
+    realized_vol = safe_float(row.get("realized_vol", np.nan))
 
     adx_ok = not np.isnan(adx) and adx >= params.adx_threshold
     vol_scale = position_sizer(
@@ -220,7 +236,9 @@ def compute_signal(
     if pos_state not in {"FLAT", "LONG", "SHORT"}:
         pos_state = "FLAT"
 
-    hist_series = df["macd_hist"].astype(float)
+    hist_series = pd.to_numeric(
+        df.get("macd_hist", pd.Series(index=df.index, dtype=float)), errors="coerce"
+    )
     grace_bars = max(0, int(getattr(params, "macd_cross_grace_bars", 0)))
     thrust_bars = max(0, int(getattr(params, "macd_thrust_bars", 0)))
 
