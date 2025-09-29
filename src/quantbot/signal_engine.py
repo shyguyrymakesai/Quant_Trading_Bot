@@ -15,7 +15,7 @@ def compute_indicators(ohlcv: list):
         "macd", [settings.macd_fast, settings.macd_slow, settings.macd_signal]
     )
     adx_len = settings.adx_len
-    
+
     # pandas-ta MACD returns DataFrame with MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
     macd_result = ta.macd(df["close"], fast=int(mf), slow=int(ms), signal=int(sig))
     df["MACD"] = macd_result[f"MACD_{mf}_{ms}_{sig}"]
