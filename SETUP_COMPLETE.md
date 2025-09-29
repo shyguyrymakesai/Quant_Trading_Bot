@@ -14,7 +14,7 @@ All required packages have been installed:
 - ✅ `ccxt==4.3.88` - Exchange connectivity
 - ✅ `pandas>=2.2.0` - Data manipulation
 - ✅ `numpy>=1.26.0` - Numerical computing
-- ✅ `TA-Lib` - Technical analysis (alternative to pandas-ta)
+- ✅ `pandas-ta>=0.3.14b0` - Technical analysis indicators
 - ✅ `backtesting==0.3.3` - Backtesting framework
 - ✅ `fastapi>=0.111.0` - API framework
 - ✅ `uvicorn>=0.30.0` - ASGI server
@@ -35,7 +35,7 @@ All required packages have been installed:
 - ✅ Successfully ran backtest with MACD + ADX strategy
 - ✅ Strategy returned 142.4% over test period
 - ✅ 88 trades with 36.4% win rate
-- ✅ Modified to use TA-Lib instead of pandas-ta for compatibility
+- ✅ Verified pandas-ta indicator outputs for compatibility
 
 ## 🚦 Next Steps
 
@@ -79,8 +79,8 @@ crypto-momentum-bot-skeleton/
 ├── config/
 │   └── config.yaml         # ✅ Main configuration
 ├── research/
-│   ├── backtest_macd_adx.py         # Original (needs pandas-ta)
-│   └── backtest_macd_adx_talib.py   # ✅ Working version (uses TA-Lib)
+│   ├── backtest_macd_adx.py         # Original research module
+│   └── backtest_macd_adx_talib.py   # ✅ Working version (uses pandas-ta)
 ├── scripts/
 │   └── run_bot.py          # Main bot runner
 ├── src/                    # Core application code

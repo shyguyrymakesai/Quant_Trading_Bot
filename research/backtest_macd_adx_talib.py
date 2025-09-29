@@ -1,9 +1,9 @@
-# Quick sanity-check backtest using Backtesting.py (Modified to use TA-Lib instead of pandas-ta)
+# Quick sanity-check backtest using Backtesting.py (uses pandas-ta indicators)
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
 from backtesting.test import GOOG
 import pandas as pd
-import talib
+import pandas_ta as ta
 import numpy as np
 import warnings
 from contextlib import contextmanager
@@ -21,21 +21,33 @@ class MACD_ADX_Strategy(Strategy):
     adx_threshold = 25
 
     def init(self):
-        # Convert price data to numpy arrays for TA-Lib
+        # Convert price data to numpy arrays for indicator calculations
         close = np.array(self.data.Close, dtype=float)
         high = np.array(self.data.High, dtype=float)
         low = np.array(self.data.Low, dtype=float)
 
-        # Calculate MACD using TA-Lib
-        macd_line, macd_signal, macd_hist = talib.MACD(
-            close,
-            fastperiod=self.macd_fast,
-            slowperiod=self.macd_slow,
-            signalperiod=self.macd_signal,
+        macd_df = ta.macd(
+            pd.Series(close),
+            fast=int(self.macd_fast),
+            slow=int(self.macd_slow),
+            signal=int(self.macd_signal),
         )
+        if macd_df is not None and not macd_df.empty and macd_df.shape[1] >= 3:
+            macd_hist = macd_df.iloc[:, 2].to_numpy()
+        else:
+            macd_hist = np.full_like(close, np.nan, dtype=float)
 
-        # Calculate ADX using TA-Lib
-        adx = talib.ADX(high, low, close, timeperiod=self.adx_len)
+        adx_df = ta.adx(
+            pd.Series(high), pd.Series(low), pd.Series(close), length=int(self.adx_len)
+        )
+        if adx_df is not None and not adx_df.empty:
+            adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
+            if adx_cols:
+                adx = adx_df[adx_cols[0]].to_numpy()
+            else:
+                adx = np.full_like(close, np.nan, dtype=float)
+        else:
+            adx = np.full_like(close, np.nan, dtype=float)
 
         # Create indicators for backtesting framework
         self.macd_hist = self.I(lambda: macd_hist, name="macd_hist")

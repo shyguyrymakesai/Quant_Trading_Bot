@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-import talib  # type: ignore
+import pandas_ta as ta
 
 
 @dataclass
@@ -77,26 +77,31 @@ def compute_indicators(
     params: StrategyParams,
 ) -> pd.DataFrame:
     df = _to_dataframe(data)
-    closes = df["close"].values.astype(float)
-    highs = df["high"].values.astype(float)
-    lows = df["low"].values.astype(float)
+    df["macd"] = np.nan
+    df["macd_signal"] = np.nan
+    df["macd_hist"] = np.nan
+    df["adx"] = np.nan
 
-    macd, macd_signal, macd_hist = talib.MACD(
-        closes,
-        fastperiod=int(params.macd_fast),
-        slowperiod=int(params.macd_slow),
-        signalperiod=int(params.macd_signal),
+    macd_df = ta.macd(
+        df["close"],
+        fast=int(params.macd_fast),
+        slow=int(params.macd_slow),
+        signal=int(params.macd_signal),
     )
-    adx = talib.ADX(
-        highs,
-        lows,
-        closes,
-        timeperiod=int(params.adx_length),
+    if macd_df is not None and not macd_df.empty:
+        macd_cols = macd_df.columns.tolist()
+        if len(macd_cols) >= 3:
+            df["macd"] = macd_df[macd_cols[0]]
+            df["macd_signal"] = macd_df[macd_cols[1]]
+            df["macd_hist"] = macd_df[macd_cols[2]]
+
+    adx_df = ta.adx(
+        df["high"], df["low"], df["close"], length=int(params.adx_length)
     )
-    df["macd"] = macd
-    df["macd_signal"] = macd_signal
-    df["macd_hist"] = macd_hist
-    df["adx"] = adx
+    if adx_df is not None and not adx_df.empty:
+        adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
+        if adx_cols:
+            df["adx"] = adx_df[adx_cols[0]]
     returns = df["close"].pct_change()
     df["returns"] = returns
     bars_per_day = _bars_per_day(params.bar_minutes)
