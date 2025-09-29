@@ -1,27 +1,15 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
 
-# system deps (build chain + TA-Lib prerequisite libs)
+# system deps (TA-Lib via Debian packages)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
-        wget \
-        ca-certificates \
+        ta-lib \
+        ta-lib-dev \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
-
-# build and install TA-Lib C library from source
-RUN wget -q https://downloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
-    && tar -xzf ta-lib-0.4.0-src.tar.gz \
-    && cd ta-lib-0.4.0 \
-    && ./configure --prefix=/usr/local \
-    && make \
-    && make install \
-    && cd / \
-    && rm -rf ta-lib-0.4.0 ta-lib-0.4.0-src.tar.gz \
-    && echo "/usr/local/lib" > /etc/ld.so.conf.d/ta-lib.conf \
-    && ldconfig
 
 WORKDIR /app
 
