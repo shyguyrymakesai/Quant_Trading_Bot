@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
+import talib
 from quantbot.config import settings, get_symbol_params
 
 
@@ -16,15 +16,24 @@ def compute_indicators(ohlcv: list):
     )
     adx_len = settings.adx_len
 
-    # pandas-ta MACD returns DataFrame with MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
-    macd_result = ta.macd(df["close"], fast=int(mf), slow=int(ms), signal=int(sig))
-    df["MACD"] = macd_result[f"MACD_{mf}_{ms}_{sig}"]
-    df["MACD_signal"] = macd_result[f"MACDs_{mf}_{ms}_{sig}"]
-    df["MACD_hist"] = macd_result[f"MACDh_{mf}_{ms}_{sig}"]
+    # TA-Lib MACD returns (macd, signal, hist)
+    macd, macd_signal, macd_hist = talib.MACD(
+        df["close"].values.astype(float),
+        fastperiod=int(mf),
+        slowperiod=int(ms),
+        signalperiod=int(sig),
+    )
+    df["MACD"] = macd
+    df["MACD_signal"] = macd_signal
+    df["MACD_hist"] = macd_hist
 
-    # pandas-ta ADX
-    adx_result = ta.adx(df["high"], df["low"], df["close"], length=int(adx_len))
-    df["ADX"] = adx_result[f"ADX_{adx_len}"]
+    adx = talib.ADX(
+        df["high"].values.astype(float),
+        df["low"].values.astype(float),
+        df["close"].values.astype(float),
+        timeperiod=int(adx_len),
+    )
+    df["ADX"] = adx
     return df
 
 
