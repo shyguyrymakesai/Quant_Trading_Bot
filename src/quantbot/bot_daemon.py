@@ -31,6 +31,7 @@ from quantbot.strategy_macd import (
     compute_signal,
     compute_signal_history,
 )
+from quantbot.signal_utils import bars_needed_contract, validate_window
 
 try:  # optional legacy comparison
     from quantbot.signal_engine import compute_indicators as legacy_indicators
@@ -490,6 +491,35 @@ class BotDaemon:
         )
         df = compute_indicators(raw, self.params)
         df.index = df.index.tz_convert(self.tz)
+        min_bars = bars_needed_contract(
+            macd_fast=self.params.macd_fast,
+            macd_slow=self.params.macd_slow,
+            macd_signal=self.params.macd_signal,
+            adx_length=self.params.adx_length,
+            vol_lookback=self.params.vol_lookback,
+            macd_cross_grace_bars=self.params.macd_cross_grace_bars,
+            macd_thrust_bars=self.params.macd_thrust_bars,
+            minimum=2,
+        )
+        status = validate_window(
+            df,
+            min_bars=min_bars,
+            as_of=cycle_start,
+            bar_minutes=self.bar_minutes,
+            required_columns=["macd_hist", "adx", "realized_vol"],
+        )
+        if not status.ok:
+            logger.info(
+                "SKIP symbol=%s tf=%s bars=%s need=%s have_closed=%s reason=%s",
+                symbol,
+                self.cfg.timeframe,
+                status.bars,
+                status.needed,
+                status.have_closed,
+                status.reason,
+            )
+            return
+
         last_price = float(df["close"].iloc[-1])
         expected_close = _expected_candle_close(cycle_start, self.bar_minutes)
         last_close = df.index[-1]
