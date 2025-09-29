@@ -80,7 +80,7 @@ def compute_indicators(
     closes = df["close"].values.astype(float)
     highs = df["high"].values.astype(float)
     lows = df["low"].values.astype(float)
-    
+
     macd, macd_signal, macd_hist = talib.MACD(
         closes,
         fastperiod=int(params.macd_fast),
@@ -101,11 +101,9 @@ def compute_indicators(
     df["returns"] = returns
     bars_per_day = _bars_per_day(params.bar_minutes)
     lookback = max(1, int(params.vol_lookback))
-    realized = (
-        returns.rolling(lookback)
-        .apply(lambda window: float(np.sqrt(np.nanmean(np.square(window)))), raw=True)
-        * np.sqrt(bars_per_day)
-    )
+    realized = returns.rolling(lookback).apply(
+        lambda window: float(np.sqrt(np.nanmean(np.square(window)))), raw=True
+    ) * np.sqrt(bars_per_day)
     df["realized_vol"] = realized
     return df
 
@@ -122,7 +120,9 @@ def position_sizer(
     return float(np.clip(target_vol / vol_estimate, min_fraction, max_fraction))
 
 
-def _coerce_datetime(value: Optional[datetime | pd.Timestamp | str]) -> Optional[datetime]:
+def _coerce_datetime(
+    value: Optional[datetime | pd.Timestamp | str],
+) -> Optional[datetime]:
     if value is None:
         return None
     if isinstance(value, pd.Timestamp):
@@ -135,6 +135,7 @@ def _coerce_datetime(value: Optional[datetime | pd.Timestamp | str]) -> Optional
         except ValueError:
             return None
     return None
+
 
 def apply_cooldown(
     result: SignalResult,
@@ -158,10 +159,17 @@ def apply_cooldown(
     bar_minutes = max(1, int(params.bar_minutes or 1))
     elapsed_minutes = max(0.0, (cur_ts - prev_ts).total_seconds() / 60.0)
     bars_elapsed = int(elapsed_minutes // bar_minutes)
-    meta.update({"cooldown_active": bars_elapsed < cooldown, "cooldown_bars": cooldown, "bars_since_exit": bars_elapsed})
+    meta.update(
+        {
+            "cooldown_active": bars_elapsed < cooldown,
+            "cooldown_bars": cooldown,
+            "bars_since_exit": bars_elapsed,
+        }
+    )
     if bars_elapsed < cooldown:
         return replace(result, signal=Signal.HOLD, reason="cooldown_active", meta=meta)
     return replace(result, meta=meta)
+
 
 def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
     if df.empty or len(df) < 2:
@@ -218,7 +226,12 @@ def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
         macd_hist=hist if not np.isnan(hist) else 0.0,
         macd_hist_prev=hist_prev if not np.isnan(hist_prev) else 0.0,
         adx=adx if not np.isnan(adx) else 0.0,
-        meta={"adx_ok": adx_ok, "vol_ok": vol_ok, "cross_up": cross_up, "cross_down": cross_down},
+        meta={
+            "adx_ok": adx_ok,
+            "vol_ok": vol_ok,
+            "cross_up": cross_up,
+            "cross_down": cross_down,
+        },
     )
 
 
@@ -236,8 +249,14 @@ def compute_signal_history(
             continue
         res = compute_signal(window, params)
         ts = window.index[-1]
-        current_ts = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else _coerce_datetime(ts) or datetime.fromisoformat(str(ts))
-        res = apply_cooldown(res, params, last_exit_ts=last_exit_ts, current_ts=current_ts)
+        current_ts = (
+            ts.to_pydatetime()
+            if hasattr(ts, "to_pydatetime")
+            else _coerce_datetime(ts) or datetime.fromisoformat(str(ts))
+        )
+        res = apply_cooldown(
+            res, params, last_exit_ts=last_exit_ts, current_ts=current_ts
+        )
         results.append(res)
         if res.signal == Signal.SELL:
             last_exit_ts = current_ts
