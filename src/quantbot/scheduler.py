@@ -1,6 +1,9 @@
 import asyncio
 import json
+from typing import Optional
+
 import boto3
+import pandas as pd
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from quantbot.config import settings, get_symbol_params
@@ -44,6 +47,26 @@ def _timeframe_to_minutes(tf: str) -> int:
     if tf.isdigit():
         return max(1, int(tf))
     return 60
+
+
+def _safe_latest(df: pd.DataFrame, column: str) -> Optional[float]:
+    if df is None or column not in df.columns:
+        return None
+    series = df[column]
+    if series is None:
+        return None
+    try:
+        if hasattr(series, "dropna"):
+            series = series.dropna()
+        if len(series) == 0:
+            return None
+        value = series.iloc[-1]
+    except (IndexError, KeyError, AttributeError):
+        return None
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_strategy_params(symbol: str) -> StrategyParams:
@@ -129,20 +152,16 @@ async def process_symbol(symbol: str):
         diag = dict(signal_result.meta or {})
 
         # Get latest market data
-        last_close = float(df["close"].iloc[-1])
-        last_high = float(df["high"].iloc[-1])
-        last_low = float(df["low"].iloc[-1])
-        last_volume = float(df["volume"].iloc[-1])
+        last_close = _safe_latest(df, "close")
+        last_high = _safe_latest(df, "high")
+        last_low = _safe_latest(df, "low")
+        last_volume = _safe_latest(df, "volume")
 
         # Get technical indicators for logging
-        macd_line = float(df["macd"].iloc[-1]) if "macd" in df.columns else None
-        macd_signal = (
-            float(df["macd_signal"].iloc[-1]) if "macd_signal" in df.columns else None
-        )
-        macd_hist = (
-            float(df["macd_hist"].iloc[-1]) if "macd_hist" in df.columns else None
-        )
-        adx = float(df["adx"].iloc[-1]) if "adx" in df.columns else None
+        macd_line = _safe_latest(df, "macd")
+        macd_signal = _safe_latest(df, "macd_signal")
+        macd_hist = _safe_latest(df, "macd_hist")
+        adx = _safe_latest(df, "adx")
 
         # Compute realized vol
         rv = float(signal_result.volatility)
@@ -193,7 +212,9 @@ async def process_symbol(symbol: str):
             ex = _exchange_auth()
             ex.load_markets()
 
-        if sig in ("buy", "sell") and size_scale > 0:
+        can_trade = sig in ("buy", "sell") and size_scale > 0 and last_close is not None
+
+        if can_trade:
             equity = 10000.0  # TODO: replace with actual equity tracking
             resp = place_signal(ex, symbol, sig, equity, last_close, rv)
             qty = resp.get("qty") if isinstance(resp, dict) else None
@@ -239,9 +260,13 @@ async def process_symbol(symbol: str):
                     }
                 )
         else:
+            if last_close is None and sig in ("buy", "sell"):
+                rationale["reason"] = f"{signal_result.reason}|missing_market_data"
+                sig = "hold"
+                log_data["signal"] = sig
             log_data["order"] = {
                 "action": "HOLD",
-                "reason": signal_result.reason,
+                "reason": rationale["reason"],
             }
             print(f"HOLD {symbol}:", rationale)
 
