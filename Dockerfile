@@ -1,25 +1,65 @@
-# ---- Runtime (single stage) ----
-FROM python:3.11-alpine
+############################
+# 1) Builder: compile TA-Lib C and build wheels
+############################
+FROM python:3.11-slim AS wheels
+ARG TA_LIB_VERSION=0.4.0
+WORKDIR /build
 
-ENV PYTHONUNBUFFERED=1
+# Toolchain for C build + curl
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential autoconf automake libtool \
+      python3-dev ca-certificates curl xz-utils \
+ && rm -rf /var/lib/apt/lists/*
 
-# System deps: TA-Lib runtime + headers to build the Python wrapper, and build tools
-RUN apk add --no-cache \
-      tzdata \
-      ta-lib ta-lib-dev \
-      g++ make
+# Build & install TA-Lib C library (NO pipefail; dash-safe)
+RUN set -eux; \
+    curl -fL --retry 5 --retry-connrefused \
+      -o /tmp/ta-lib-src.tgz \
+      "https://github.com/TA-Lib/ta-lib/releases/download/v${TA_LIB_VERSION}/ta-lib-${TA_LIB_VERSION}-src.tar.gz"; \
+    mkdir -p /tmp/ta-lib; \
+    tar -xzf /tmp/ta-lib-src.tgz -C /tmp/ta-lib --strip-components=1; \
+    cd /tmp/ta-lib; \
+    ./configure --prefix=/usr/local; \
+    make -j"$(nproc)"; \
+    make install; \
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/ta-lib.conf; \
+    ldconfig; \
+    rm -rf /tmp/ta-lib /tmp/ta-lib-src.tgz
 
-WORKDIR /app
-
-# (optional but recommended) pin pip and ensure numpy first
+# Build wheels for Python deps (numpy first helps TA-Lib wrapper)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
  && pip install --no-cache-dir numpy
 
-# install your deps (TA-Lib should be in requirements.txt with this exact casing)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy only requirements now (cache-friendly)
+COPY requirements.txt /build/requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir=/build/wheels -r /build/requirements.txt
 
-# rest of your image
+############################
+# 2) Runtime: slim image, no compilers
+############################
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Minimal runtime deps
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+# TA-Lib C runtime
+COPY --from=wheels /usr/local/lib/libta_lib.* /usr/local/lib/
+COPY --from=wheels /usr/local/include/ta-lib/ /usr/local/include/ta-lib/
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/ta-lib.conf && ldconfig
+
+# Install prebuilt wheels (no compile in runtime)
+COPY --from=wheels /build/wheels /wheels
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r /app/requirements.txt \
+ && rm -rf /wheels
+
 COPY . .
 
 ENV PYTHONPATH=/app/src
