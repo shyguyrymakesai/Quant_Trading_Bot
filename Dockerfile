@@ -1,27 +1,28 @@
-# Use Debian bookworm where TA-Lib is available
-FROM python:3.11-bookworm
+# Use Ubuntu 22.04 base and install Python 3.11
+FROM ubuntu:jammy
 
 ENV PYTHONUNBUFFERED=1
 
-# System deps: TA-Lib C lib + headers, compiler (for any other wheels), tzdata
+# Install Python 3.11 and TA-Lib C library + headers from apt
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libta-lib0 libta-lib-dev \
-      build-essential \
-      tzdata \
- && rm -rf /var/lib/apt/lists/*
+      python3.11 python3.11-dev python3.11-venv \
+      python3-pip \
+      libta-lib0 ta-lib-dev \
+      build-essential tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -sf /usr/bin/python3.11 /usr/bin/python \
+ && ln -sf /usr/bin/python3.11 /usr/bin/python3
 
 WORKDIR /app
 
-# Python deps
-# 1) Upgrade pip tooling
-# 2) Install numpy first (TA-Lib wrapper needs it)
-# 3) Install requirements (including TA-Lib Python wrapper)
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
- && pip install --no-cache-dir numpy
+# Python deps (numpy first, then wrapper)
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && python -m pip install --no-cache-dir numpy \
+ && python -m pip install --no-cache-dir TA-Lib
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
