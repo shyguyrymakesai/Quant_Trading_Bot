@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import talib
+import pandas_ta as ta
 from quantbot.config import settings, get_symbol_params
 
 
@@ -16,24 +16,28 @@ def compute_indicators(ohlcv: list):
     )
     adx_len = settings.adx_len
 
-    # TA-Lib MACD returns (macd, signal, hist)
-    macd, macd_signal, macd_hist = talib.MACD(
-        df["close"].values.astype(float),
-        fastperiod=int(mf),
-        slowperiod=int(ms),
-        signalperiod=int(sig),
-    )
-    df["MACD"] = macd
-    df["MACD_signal"] = macd_signal
-    df["MACD_hist"] = macd_hist
+    df["MACD"] = np.nan
+    df["MACD_signal"] = np.nan
+    df["MACD_hist"] = np.nan
+    df["ADX"] = np.nan
 
-    adx = talib.ADX(
-        df["high"].values.astype(float),
-        df["low"].values.astype(float),
-        df["close"].values.astype(float),
-        timeperiod=int(adx_len),
+    macd_df = ta.macd(
+        df["close"], fast=int(mf), slow=int(ms), signal=int(sig)
     )
-    df["ADX"] = adx
+    if macd_df is not None and not macd_df.empty:
+        macd_cols = macd_df.columns.tolist()
+        if len(macd_cols) >= 3:
+            df["MACD"] = macd_df[macd_cols[0]]
+            df["MACD_signal"] = macd_df[macd_cols[1]]
+            df["MACD_hist"] = macd_df[macd_cols[2]]
+
+    adx_df = ta.adx(
+        df["high"], df["low"], df["close"], length=int(adx_len)
+    )
+    if adx_df is not None and not adx_df.empty:
+        adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
+        if adx_cols:
+            df["ADX"] = adx_df[adx_cols[0]]
     return df
 
 
@@ -56,7 +60,7 @@ def last_signal(df: pd.DataFrame):
     sym_params = get_symbol_params(settings.symbol)
     adx_thr = int(sym_params.get("adx_threshold", settings.adx_threshold))
     adx_ok = row.get("ADX", 0) > adx_thr
-    # MACD histogram cross as signal (TA-Lib column)
+    # MACD histogram cross as signal (pandas-ta column)
     macd_hist = row.get("MACD_hist")
     macd_hist_prev = prev.get("MACD_hist")
     if adx_ok and macd_hist is not None and macd_hist_prev is not None:

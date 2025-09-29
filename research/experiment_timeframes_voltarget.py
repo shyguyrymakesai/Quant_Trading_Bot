@@ -45,9 +45,9 @@ except Exception:  # pragma: no cover
 
 # TA and Backtesting
 try:
-    import talib  # type: ignore
+    import pandas_ta as ta  # type: ignore
 except Exception as e:  # pragma: no cover
-    talib = None
+    ta = None
 
 from backtesting import Backtest, Strategy  # type: ignore
 
@@ -396,33 +396,45 @@ class MACD_ADX_VolTarget(Strategy):
     _last_exit_bar: int = -10**9
 
     def init(self):  # type: ignore
-        if talib is None:
-            raise ImportError("TA-Lib is required for this strategy")
-        close = self.data.Close
-        high = self.data.High
-        low = self.data.Low
+        if ta is None:
+            raise ImportError("pandas-ta is required for this strategy")
+        close = pd.Series(self.data.Close).astype(float)
+        high = pd.Series(self.data.High).astype(float)
+        low = pd.Series(self.data.Low).astype(float)
 
-        macd, macdsig, _ = self.I(
-            lambda c, f, s, sig: talib.MACD(
-                c, fastperiod=f, slowperiod=s, signalperiod=sig
-            ),
+        macd_df = ta.macd(
             close,
-            self.fast,
-            self.slow,
-            self.signal,
+            fast=int(self.fast),
+            slow=int(self.slow),
+            signal=int(self.signal),
         )
-        self.macd = macd
-        self.macdsig = macdsig
-        self.hist = self.I(lambda a, b: a - b, self.macd, self.macdsig)
+        if macd_df is not None and not macd_df.empty and macd_df.shape[1] >= 3:
+            macd_vals = macd_df.iloc[:, 0].to_numpy()
+            macdsig_vals = macd_df.iloc[:, 1].to_numpy()
+            hist_vals = macd_df.iloc[:, 2].to_numpy()
+        else:
+            macd_vals = np.full(len(close), np.nan, dtype=float)
+            macdsig_vals = np.full(len(close), np.nan, dtype=float)
+            hist_vals = np.full(len(close), np.nan, dtype=float)
+        self.macd = self.I(lambda: macd_vals, name="macd")
+        self.macdsig = self.I(lambda: macdsig_vals, name="macd_signal")
+        self.hist = self.I(lambda: hist_vals, name="macd_hist")
 
-        adx = self.I(
-            lambda h, l, c, n: talib.ADX(h, l, c, timeperiod=n),
+        adx_df = ta.adx(
             high,
             low,
             close,
-            self.adx_len,
+            length=int(self.adx_len),
         )
-        self.adx = adx
+        if adx_df is not None and not adx_df.empty:
+            adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
+            if adx_cols:
+                adx_vals = adx_df[adx_cols[0]].to_numpy()
+            else:
+                adx_vals = np.full(len(close), np.nan, dtype=float)
+        else:
+            adx_vals = np.full(len(close), np.nan, dtype=float)
+        self.adx = self.I(lambda: adx_vals, name="adx")
         self._last_exit_bar = -10**9
 
         # Vol estimates (rolling std of returns)

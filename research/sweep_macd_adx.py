@@ -10,9 +10,7 @@ from backtesting import Backtest, Strategy
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# Use TA-Lib exclusively
-USE_TALIB = True
-import talib
+import pandas_ta as ta
 
 # Fast/targeted sweep toggle
 FAST_MODE = True  # keep True to run the lean targeted sweep described below
@@ -154,20 +152,33 @@ class Strat(Strategy):
         price_series = pd.Series(self.data.Close).astype(float)
         high_series = pd.Series(self.data.High).astype(float)
         low_series = pd.Series(self.data.Low).astype(float)
-        macd, macdsig, macdh = talib.MACD(
-            price_series.values,
-            fastperiod=self.macd_fast,
-            slowperiod=self.macd_slow,
-            signalperiod=self.macd_signal,
+        macd_df = ta.macd(
+            price_series,
+            fast=int(self.macd_fast),
+            slow=int(self.macd_slow),
+            signal=int(self.macd_signal),
         )
-        self.macd_hist = self.I(lambda: macdh, name="macd_hist")
-        adx = talib.ADX(
-            high_series.values,
-            low_series.values,
-            price_series.values,
-            timeperiod=self.adx_len,
+        if macd_df is not None and not macd_df.empty and macd_df.shape[1] >= 3:
+            macd_hist = macd_df.iloc[:, 2].to_numpy()
+        else:
+            macd_hist = np.full(len(price_series), np.nan, dtype=float)
+        self.macd_hist = self.I(lambda: macd_hist, name="macd_hist")
+
+        adx_df = ta.adx(
+            high_series,
+            low_series,
+            price_series,
+            length=int(self.adx_len),
         )
-        self.adx = self.I(lambda: adx, name="adx")
+        if adx_df is not None and not adx_df.empty:
+            adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
+            if adx_cols:
+                adx_vals = adx_df[adx_cols[0]].to_numpy()
+            else:
+                adx_vals = np.full(len(price_series), np.nan, dtype=float)
+        else:
+            adx_vals = np.full(len(price_series), np.nan, dtype=float)
+        self.adx = self.I(lambda: adx_vals, name="adx")
 
         rets = price_series.pct_change().fillna(0.0)
         self.realized_vol = self.I(

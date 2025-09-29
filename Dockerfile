@@ -1,31 +1,20 @@
-# Use Ubuntu 22.04 base and install Python 3.11
-FROM ubuntu:jammy
+FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1
-
-# Install Python 3.11 and TA-Lib C library + headers from apt
+# Minimal system deps
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      python3.11 python3.11-dev python3.11-venv \
-      python3-pip \
-      libta-lib0 ta-lib-dev \
-      build-essential tzdata \
- && rm -rf /var/lib/apt/lists/* \
- && ln -sf /usr/bin/python3.11 /usr/bin/python \
- && ln -sf /usr/bin/python3.11 /usr/bin/python3
+ && apt-get install -y --no-install-recommends tzdata \
+ && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Faster, cleaner pip
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python -m pip install --upgrade pip
 
-# Python deps (numpy first, then wrapper)
-RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
- && python -m pip install --no-cache-dir numpy \
- && python -m pip install --no-cache-dir TA-Lib
-
+# Install Python deps
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
+# App code
 COPY . .
 
-ENV PYTHONPATH=/app/src
-
+# Default command
 CMD ["python", "src/run_once.py"]

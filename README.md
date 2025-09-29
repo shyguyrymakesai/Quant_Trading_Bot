@@ -22,7 +22,7 @@ includes an ops-ready paper trading stack:
 
 - **`src/bot_daemon.py`** — APScheduler daemon with circuit breaker,
   parity check, signal-safe shutdown, and structured logging.
-- **`src/strategy_macd.py`** — Indicator + signal engine using TA-Lib MACD/ADX
+- **`src/strategy_macd.py`** — Indicator + signal engine using pandas-ta MACD/ADX
   and volatility-targeted sizing.
 - **`src/broker.py`** — Paper broker (immediate fills, journal integration)
   with a thin ccxt-backed live skeleton.
@@ -142,10 +142,10 @@ pytest
 
 ## 6. Research toolkit (backtests + parameter sweeps)
 
-The `research/` folder contains reproducible backtests and a flexible sweep engine built around TA-Lib:
+The `research/` folder contains reproducible backtests and a flexible sweep engine built around pandas-ta:
 
-- `research/backtest_macd_adx_talib.py`
-  - Runs a sanity strategy backtest using TA-Lib MACD/ADX.
+- `research/backtest_macd_adx_talib.py` *(legacy filename)*
+  - Runs a sanity strategy backtest using pandas-ta MACD/ADX.
   - Suppresses divide-by-zero warnings from Sortino when there are no negative returns.
 
 - `research/sweep_macd_adx.py`
@@ -160,7 +160,7 @@ The `research/` folder contains reproducible backtests and a flexible sweep engi
 ### Run backtests and sweeps (Windows PowerShell)
 
 ```powershell
-# Backtest sanity check (TA-Lib based)
+# Backtest sanity check (pandas-ta based)
 python research\backtest_macd_adx_talib.py
 
 # Fast parameter sweep

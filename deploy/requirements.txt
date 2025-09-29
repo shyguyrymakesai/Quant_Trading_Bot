@@ -10,7 +10,7 @@ loguru>=0.7.2
 numpy>=1.26.0
 python-dotenv>=1.0.1
 PyYAML>=6.0.1
-TA-Lib>=0.4.28
+pandas-ta>=0.3.14b0
 yfinance
 pydantic>=2.7.0
 pydantic-settings>=2.4.0
