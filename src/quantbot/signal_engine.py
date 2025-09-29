@@ -62,6 +62,9 @@ def volatility_target_size(df: pd.DataFrame, *, symbol: Optional[str] = None):
 
 
 def last_signal(df: pd.DataFrame, *, symbol: Optional[str] = None):
+    if df is None or df.empty or len(df) < 2:
+        return "hold"
+
     row = df.iloc[-1]
     prev = df.iloc[-2]
     eff_symbol = _resolve_symbol(symbol)
@@ -72,12 +75,27 @@ def last_signal(df: pd.DataFrame, *, symbol: Optional[str] = None):
         )
     )
     adx_value = row.get("adx")
-    if adx_value is None:
+    if adx_value is None or pd.isna(adx_value):
         adx_value = row.get("ADX")
-    adx_ok = (adx_value or 0) > adx_thr
+    if adx_value is None or pd.isna(adx_value):
+        return "hold"
+    adx_ok = float(adx_value) > adx_thr
+
     # MACD histogram cross as signal (pandas-ta column)
-    macd_hist = row.get("MACD_hist") or row.get("macd_hist")
-    macd_hist_prev = prev.get("MACD_hist") or prev.get("macd_hist")
+    def _get_hist(source_row: pd.Series) -> Optional[float]:
+        value = source_row.get("MACD_hist")
+        if value is None or pd.isna(value):
+            value = source_row.get("macd_hist")
+        if value is None or pd.isna(value):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    macd_hist = _get_hist(row)
+    macd_hist_prev = _get_hist(prev)
+
     if adx_ok and macd_hist is not None and macd_hist_prev is not None:
         if macd_hist > 0 and macd_hist_prev <= 0:
             return "buy"
