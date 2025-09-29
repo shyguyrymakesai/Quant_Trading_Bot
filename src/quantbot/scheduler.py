@@ -9,6 +9,7 @@ from quantbot.signal_engine import (
     compute_indicators,
     last_signal,
     volatility_target_size,
+    compute_realized_vol,
 )
 from quantbot.execution_adapter import place_order, _exchange_auth, place_signal
 from quantbot.db import log_trade
@@ -40,9 +41,9 @@ async def process_symbol(symbol: str):
     try:
         # Fetch data
         ohlcv = fetch_ohlcv(symbol, settings.timeframe, limit=300)
-        df = compute_indicators(ohlcv)
-        sig = last_signal(df)
-        size_scale = volatility_target_size(df).iloc[-1]
+        df = compute_indicators(ohlcv, symbol=symbol)
+        sig = last_signal(df, symbol=symbol)
+        size_scale = volatility_target_size(df, symbol=symbol).iloc[-1]
         rationale = {"sig": sig, "size_scale": float(size_scale)}
         
         # Get latest market data
@@ -58,8 +59,7 @@ async def process_symbol(symbol: str):
         adx = float(df["adx"].iloc[-1]) if "adx" in df.columns else None
         
         # Compute realized vol
-        from quantbot.signal_engine import compute_realized_vol
-        rv = compute_realized_vol(df)
+        rv = compute_realized_vol(df, symbol=symbol)
         
         # Daily loss guard
         daily_loss_breached = False
@@ -208,6 +208,7 @@ async def tick():
         },
         "results": results
     }
+    summary["symbol"] = "SUMMARY"
     
     # Log summary to S3
     await log_to_s3(summary, bucket=settings.s3_bucket_trades if hasattr(settings, 's3_bucket_trades') else "quant-bot-trades-969932165253")

@@ -1,35 +1,45 @@
+from __future__ import annotations
+
+from typing import Optional
+
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
 from quantbot.config import settings, get_symbol_params
 
 
-def compute_indicators(ohlcv: list):
+def _resolve_symbol(symbol: Optional[str]) -> str:
+    """Return a symbol string falling back to global settings."""
+    return symbol or getattr(settings, "current_symbol", None) or settings.symbol
+
+
+def compute_indicators(ohlcv: list, *, symbol: Optional[str] = None):
     """ohlcv: list of [ts, open, high, low, close, volume]"""
     df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
     df.set_index("ts", inplace=True)
     # Per-symbol overrides
-    sym_params = get_symbol_params(settings.symbol)
-    mf, ms, sig = sym_params.get(
-        "macd", [settings.macd_fast, settings.macd_slow, settings.macd_signal]
-    )
-    adx_len = settings.adx_len
+    eff_symbol = _resolve_symbol(symbol)
+    sym_params = get_symbol_params(eff_symbol)
+    macd_fast = int(sym_params.get("fast", settings.macd_fast))
+    macd_slow = int(sym_params.get("slow", settings.macd_slow))
+    macd_signal = int(sym_params.get("signal", settings.macd_signal))
+    adx_len = int(sym_params.get("adx_len", settings.adx_len))
 
-    df["MACD"] = np.nan
-    df["MACD_signal"] = np.nan
-    df["MACD_hist"] = np.nan
-    df["ADX"] = np.nan
+    df["macd"] = np.nan
+    df["macd_signal"] = np.nan
+    df["macd_hist"] = np.nan
+    df["adx"] = np.nan
 
     macd_df = ta.macd(
-        df["close"], fast=int(mf), slow=int(ms), signal=int(sig)
+        df["close"], fast=macd_fast, slow=macd_slow, signal=macd_signal
     )
     if macd_df is not None and not macd_df.empty:
         macd_cols = macd_df.columns.tolist()
         if len(macd_cols) >= 3:
-            df["MACD"] = macd_df[macd_cols[0]]
-            df["MACD_signal"] = macd_df[macd_cols[1]]
-            df["MACD_hist"] = macd_df[macd_cols[2]]
+            df["macd"] = macd_df[macd_cols[0]]
+            df["macd_signal"] = macd_df[macd_cols[1]]
+            df["macd_hist"] = macd_df[macd_cols[2]]
 
     adx_df = ta.adx(
         df["high"], df["low"], df["close"], length=int(adx_len)
@@ -37,12 +47,13 @@ def compute_indicators(ohlcv: list):
     if adx_df is not None and not adx_df.empty:
         adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
         if adx_cols:
-            df["ADX"] = adx_df[adx_cols[0]]
+            df["adx"] = adx_df[adx_cols[0]]
     return df
 
 
-def volatility_target_size(df: pd.DataFrame):
-    sym_params = get_symbol_params(settings.symbol)
+def volatility_target_size(df: pd.DataFrame, *, symbol: Optional[str] = None):
+    eff_symbol = _resolve_symbol(symbol)
+    sym_params = get_symbol_params(eff_symbol)
     lb = int(sym_params.get("vol_lb", settings.vol_lookback))
     tgt = float(sym_params.get("target_vol", settings.vol_target))
     returns = df["close"].pct_change()
@@ -54,15 +65,19 @@ def volatility_target_size(df: pd.DataFrame):
     return scale.fillna(0.0)
 
 
-def last_signal(df: pd.DataFrame):
+def last_signal(df: pd.DataFrame, *, symbol: Optional[str] = None):
     row = df.iloc[-1]
     prev = df.iloc[-2]
-    sym_params = get_symbol_params(settings.symbol)
-    adx_thr = int(sym_params.get("adx_threshold", settings.adx_threshold))
-    adx_ok = row.get("ADX", 0) > adx_thr
+    eff_symbol = _resolve_symbol(symbol)
+    sym_params = get_symbol_params(eff_symbol)
+    adx_thr = int(sym_params.get("adx_th", sym_params.get("adx_threshold", settings.adx_threshold)))
+    adx_value = row.get("adx")
+    if adx_value is None:
+        adx_value = row.get("ADX")
+    adx_ok = (adx_value or 0) > adx_thr
     # MACD histogram cross as signal (pandas-ta column)
-    macd_hist = row.get("MACD_hist")
-    macd_hist_prev = prev.get("MACD_hist")
+    macd_hist = row.get("MACD_hist") or row.get("macd_hist")
+    macd_hist_prev = prev.get("MACD_hist") or prev.get("macd_hist")
     if adx_ok and macd_hist is not None and macd_hist_prev is not None:
         if macd_hist > 0 and macd_hist_prev <= 0:
             return "buy"
@@ -71,8 +86,9 @@ def last_signal(df: pd.DataFrame):
     return "hold"
 
 
-def compute_realized_vol(df: pd.DataFrame):
-    sym_params = get_symbol_params(settings.symbol)
+def compute_realized_vol(df: pd.DataFrame, *, symbol: Optional[str] = None):
+    eff_symbol = _resolve_symbol(symbol)
+    sym_params = get_symbol_params(eff_symbol)
     lb = int(sym_params.get("vol_lb", settings.vol_lookback))
     returns = df["close"].pct_change()
     vol = returns.rolling(lb).std()
