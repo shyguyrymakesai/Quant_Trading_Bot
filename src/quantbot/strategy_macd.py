@@ -17,6 +17,8 @@ class StrategyParams:
     macd_signal: int = 9
     adx_length: int = 14
     adx_threshold: float = 20.0
+    macd_cross_grace_bars: int = 3
+    macd_thrust_bars: int = 2
     vol_lookback: int = 30
     target_daily_vol: float = 0.02
     min_fraction: float = 0.0
@@ -151,15 +153,16 @@ def apply_cooldown(
 ) -> SignalResult:
     cooldown = max(0, int(params.cooldown_bars))
     meta = dict(result.meta)
+    meta.setdefault("cooldown_bars", cooldown)
+    meta.setdefault("cooldown_ok", True)
     if cooldown <= 0 or result.signal != Signal.BUY:
         meta.setdefault("cooldown_active", False)
-        if cooldown > 0:
-            meta.setdefault("cooldown_bars", cooldown)
+        meta["cooldown_ok"] = True
         return replace(result, meta=meta)
     prev_ts = _coerce_datetime(last_exit_ts)
     cur_ts = _coerce_datetime(current_ts)
     if prev_ts is None or cur_ts is None:
-        meta.update({"cooldown_active": False, "cooldown_bars": cooldown})
+        meta.update({"cooldown_active": False, "cooldown_ok": True})
         return replace(result, meta=meta)
     bar_minutes = max(1, int(params.bar_minutes or 1))
     elapsed_minutes = max(0.0, (cur_ts - prev_ts).total_seconds() / 60.0)
@@ -169,14 +172,25 @@ def apply_cooldown(
             "cooldown_active": bars_elapsed < cooldown,
             "cooldown_bars": cooldown,
             "bars_since_exit": bars_elapsed,
+            "cooldown_ok": bars_elapsed >= cooldown,
         }
     )
     if bars_elapsed < cooldown:
-        return replace(result, signal=Signal.HOLD, reason="cooldown_active", meta=meta)
+        return replace(
+            result,
+            signal=Signal.HOLD,
+            reason="cooldown_active",
+            meta=meta,
+        )
     return replace(result, meta=meta)
 
 
-def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
+def compute_signal(
+    df: pd.DataFrame,
+    params: StrategyParams,
+    *,
+    position_state: str = "FLAT",
+) -> SignalResult:
     if df.empty or len(df) < 2:
         return SignalResult(
             signal=Signal.HOLD,
@@ -204,8 +218,42 @@ def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
     )
     vol_ok = vol_scale > 0
 
-    cross_up = hist > 0 and hist_prev <= 0
-    cross_down = hist < 0 and hist_prev >= 0
+    pos_state = (position_state or "FLAT").upper()
+    if pos_state not in {"FLAT", "LONG", "SHORT"}:
+        pos_state = "FLAT"
+
+    hist_series = df["macd_hist"].astype(float)
+    grace_bars = max(0, int(getattr(params, "macd_cross_grace_bars", 0)))
+    thrust_bars = max(0, int(getattr(params, "macd_thrust_bars", 0)))
+
+    cross_up_now = hist > 0 and hist_prev <= 0
+    cross_down_now = hist < 0 and hist_prev >= 0
+
+    cross_up_within_k = False
+    cross_down_within_k = False
+    if grace_bars > 0 and len(hist_series.dropna()) >= 2:
+        recent = hist_series.iloc[-(grace_bars + 1) :]
+        shifted = recent.shift(1)
+        flips_up = (shifted <= 0) & (recent > 0)
+        flips_down = (shifted >= 0) & (recent < 0)
+        cross_up_within_k = bool(flips_up.iloc[-grace_bars:].any())
+        cross_down_within_k = bool(flips_down.iloc[-grace_bars:].any())
+
+    thrust_up = False
+    thrust_down = False
+    if thrust_bars > 0 and len(hist_series.dropna()) >= thrust_bars:
+        diff_series = hist_series.diff().fillna(0.0)
+        tail = diff_series.iloc[-thrust_bars:]
+        thrust_up = bool(hist > 0 and (tail > 0).all())
+        thrust_down = bool(hist < 0 and (tail < 0).all())
+
+    trend_ok = adx_ok
+    want_long = trend_ok and (
+        cross_up_now or cross_up_within_k or (pos_state == "FLAT" and thrust_up)
+    )
+    want_short = trend_ok and (
+        cross_down_now or cross_down_within_k or (pos_state == "FLAT" and thrust_down)
+    )
 
     signal = Signal.HOLD
     reason = "no_cross"
@@ -214,12 +262,26 @@ def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
     elif not vol_ok:
         reason = "vol_scale_zero"
     else:
-        if cross_up:
+        if pos_state in {"FLAT", "SHORT"} and want_long:
             signal = Signal.BUY
-            reason = "macd_cross_up"
-        elif cross_down:
+            if cross_up_now:
+                reason = "macd_cross_up"
+            elif cross_up_within_k:
+                reason = "macd_cross_recent"
+            elif thrust_up:
+                reason = "macd_thrust_up"
+            else:
+                reason = "trend_follow_buy"
+        elif pos_state in {"FLAT", "LONG"} and want_short:
             signal = Signal.SELL
-            reason = "macd_cross_down"
+            if cross_down_now:
+                reason = "macd_cross_down"
+            elif cross_down_within_k:
+                reason = "macd_cross_recent"
+            elif thrust_down:
+                reason = "macd_thrust_down"
+            else:
+                reason = "trend_follow_sell"
         else:
             reason = "hold"
 
@@ -234,8 +296,22 @@ def compute_signal(df: pd.DataFrame, params: StrategyParams) -> SignalResult:
         meta={
             "adx_ok": adx_ok,
             "vol_ok": vol_ok,
-            "cross_up": cross_up,
-            "cross_down": cross_down,
+            "trend_ok": trend_ok,
+            "cross_up": cross_up_now or cross_up_within_k,
+            "cross_down": cross_down_now or cross_down_within_k,
+            "cross_up_now": cross_up_now,
+            "cross_down_now": cross_down_now,
+            "cross_up_within_k": cross_up_within_k,
+            "cross_down_within_k": cross_down_within_k,
+            "thrust_up": thrust_up,
+            "thrust_down": thrust_down,
+            "position_state": pos_state,
+            "want_long": want_long,
+            "want_short": want_short,
+            "cooldown_ok": True,
+            "macd_cross_grace_bars": grace_bars,
+            "macd_thrust_bars": thrust_bars,
+            "position": pos_state,
         },
     )
 
@@ -248,11 +324,12 @@ def compute_signal_history(
 ) -> List[SignalResult]:
     results: List[SignalResult] = []
     last_exit_ts: Optional[datetime] = None
+    position_state = "FLAT"
     for idx in range(len(df)):
         window = df.iloc[: idx + 1]
         if len(window) < 2:
             continue
-        res = compute_signal(window, params)
+        res = compute_signal(window, params, position_state=position_state)
         ts = window.index[-1]
         current_ts = (
             ts.to_pydatetime()
@@ -263,6 +340,10 @@ def compute_signal_history(
             res, params, last_exit_ts=last_exit_ts, current_ts=current_ts
         )
         results.append(res)
+        if res.signal == Signal.BUY:
+            position_state = "LONG"
+        elif res.signal == Signal.SELL:
+            position_state = "SHORT"
         if res.signal == Signal.SELL:
             last_exit_ts = current_ts
     return results[-lookback:]

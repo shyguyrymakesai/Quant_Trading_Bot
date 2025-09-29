@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     macd_signal: int = 9
     adx_len: int = 14
     adx_threshold: float = 20.0
+    macd_cross_grace_bars: int = 3
+    macd_thrust_bars: int = 2
     vol_lookback: int = 20
     vol_target: float = 0.02
     min_size: float = 0.0
@@ -248,6 +250,41 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["macd_signal"] = macd_cfg.get("signal", 9)
     out["adx_len"] = adx_cfg.get("length", 14)
     out["adx_threshold"] = adx_cfg.get("threshold", 20)
+    def _first_defined(*values):
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
+    def _as_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return default
+
+    out["macd_cross_grace_bars"] = _as_int(
+        _first_defined(
+            macd_cfg.get("cross_grace_bars"),
+            macd_cfg.get("grace_window"),
+            macd_cfg.get("grace_bars"),
+            strat_cfg.get("grace_window"),
+            cfg.get("macd_cross_grace_bars"),
+            3,
+        ),
+        3,
+    )
+    out["macd_thrust_bars"] = _as_int(
+        _first_defined(
+            macd_cfg.get("thrust_bars"),
+            strat_cfg.get("thrust_bars"),
+            cfg.get("macd_thrust_bars"),
+            2,
+        ),
+        2,
+    )
     out["vol_lookback"] = vol_cfg.get("lookback", 20)
     out["vol_target"] = vol_cfg.get("target_vol", 0.02)
     out["min_size"] = vol_cfg.get("min_size", 0.0)

@@ -31,9 +31,7 @@ def compute_indicators(ohlcv: list, *, symbol: Optional[str] = None):
     df["macd_hist"] = np.nan
     df["adx"] = np.nan
 
-    macd_df = ta.macd(
-        df["close"], fast=macd_fast, slow=macd_slow, signal=macd_signal
-    )
+    macd_df = ta.macd(df["close"], fast=macd_fast, slow=macd_slow, signal=macd_signal)
     if macd_df is not None and not macd_df.empty:
         macd_cols = macd_df.columns.tolist()
         if len(macd_cols) >= 3:
@@ -41,9 +39,7 @@ def compute_indicators(ohlcv: list, *, symbol: Optional[str] = None):
             df["macd_signal"] = macd_df[macd_cols[1]]
             df["macd_hist"] = macd_df[macd_cols[2]]
 
-    adx_df = ta.adx(
-        df["high"], df["low"], df["close"], length=int(adx_len)
-    )
+    adx_df = ta.adx(df["high"], df["low"], df["close"], length=int(adx_len))
     if adx_df is not None and not adx_df.empty:
         adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
         if adx_cols:
@@ -70,7 +66,11 @@ def last_signal(df: pd.DataFrame, *, symbol: Optional[str] = None):
     prev = df.iloc[-2]
     eff_symbol = _resolve_symbol(symbol)
     sym_params = get_symbol_params(eff_symbol)
-    adx_thr = int(sym_params.get("adx_th", sym_params.get("adx_threshold", settings.adx_threshold)))
+    adx_thr = int(
+        sym_params.get(
+            "adx_th", sym_params.get("adx_threshold", settings.adx_threshold)
+        )
+    )
     adx_value = row.get("adx")
     if adx_value is None:
         adx_value = row.get("ADX")

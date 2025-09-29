@@ -62,10 +62,12 @@ def test_compute_signal_buy():
         },
         index=idx,
     )
-    result = compute_signal(df, params)
+    result = compute_signal(df, params, position_state="FLAT")
     assert result.signal == Signal.BUY
     assert result.meta["adx_ok"] is True
     assert result.meta["vol_ok"] is True
+    assert result.meta["cross_up_now"] is True
+    assert result.reason == "macd_cross_up"
 
 
 def test_compute_signal_sell_and_gating():
@@ -80,14 +82,61 @@ def test_compute_signal_sell_and_gating():
         },
         index=idx,
     )
-    result_down = compute_signal(df_down, params)
+    result_down = compute_signal(df_down, params, position_state="LONG")
     assert result_down.signal == Signal.SELL
+    assert result_down.reason in {"macd_cross_down", "macd_cross_recent"}
 
     df_low_adx = df_down.copy()
     df_low_adx.loc[:, "adx"] = [10, 10]
-    result_low = compute_signal(df_low_adx, params)
+    result_low = compute_signal(df_low_adx, params, position_state="LONG")
     assert result_low.signal == Signal.HOLD
     assert result_low.reason == "adx_below_threshold"
+
+
+def test_grace_window_triggers_buy_when_cross_recent():
+    params = StrategyParams(
+        adx_threshold=20,
+        target_daily_vol=0.02,
+        macd_cross_grace_bars=3,
+        macd_thrust_bars=0,
+    )
+    idx = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "macd_hist": [-0.2, 0.1, 0.2],
+            "adx": [30, 30, 30],
+            "realized_vol": [0.01, 0.01, 0.01],
+            "close": [100.0, 101.0, 102.0],
+        },
+        index=idx,
+    )
+    result = compute_signal(df, params, position_state="FLAT")
+    assert result.signal == Signal.BUY
+    assert result.reason == "macd_cross_recent"
+    assert result.meta["cross_up_within_k"] is True
+
+
+def test_thrust_entry_when_hist_rising():
+    params = StrategyParams(
+        adx_threshold=20,
+        target_daily_vol=0.02,
+        macd_cross_grace_bars=0,
+        macd_thrust_bars=2,
+    )
+    idx = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "macd_hist": [0.05, 0.1, 0.2],
+            "adx": [35, 35, 35],
+            "realized_vol": [0.01, 0.01, 0.01],
+            "close": [100.0, 100.5, 101.0],
+        },
+        index=idx,
+    )
+    result = compute_signal(df, params, position_state="FLAT")
+    assert result.signal == Signal.BUY
+    assert result.reason == "macd_thrust_up"
+    assert result.meta["thrust_up"] is True
 
 
 def make_noisy_ohlcv(periods: int = 60):
@@ -124,6 +173,7 @@ def test_apply_cooldown_blocks_buy_within_window():
     assert gated.signal == Signal.HOLD
     assert gated.reason == "cooldown_active"
     assert gated.meta["cooldown_active"] is True
+    assert gated.meta["cooldown_ok"] is False
     assert gated.meta["bars_since_exit"] == 1
 
 
@@ -144,6 +194,7 @@ def test_apply_cooldown_allows_entry_after_window():
     allowed = apply_cooldown(base_result, params, last_exit_ts=last_exit, current_ts=now)
     assert allowed.signal == Signal.BUY
     assert allowed.meta["cooldown_active"] is False
+    assert allowed.meta["cooldown_ok"] is True
 
 
 def test_compute_indicators_respects_vol_lookback():

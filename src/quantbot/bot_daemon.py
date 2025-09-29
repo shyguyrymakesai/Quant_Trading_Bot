@@ -200,6 +200,8 @@ class BotDaemon:
             macd_signal=cfg.macd_signal,
             adx_length=cfg.adx_len,
             adx_threshold=cfg.adx_threshold,
+            macd_cross_grace_bars=cfg.macd_cross_grace_bars,
+            macd_thrust_bars=cfg.macd_thrust_bars,
             vol_lookback=cfg.vol_lookback,
             target_daily_vol=cfg.vol_target,
             min_fraction=cfg.min_size,
@@ -236,6 +238,11 @@ class BotDaemon:
             "signal": "macd_signal",
             "adx_len": "adx_length",
             "adx_th": "adx_threshold",
+            "macd_cross_grace_bars": "macd_cross_grace_bars",
+            "grace_bars": "macd_cross_grace_bars",
+            "grace_window": "macd_cross_grace_bars",
+            "macd_thrust_bars": "macd_thrust_bars",
+            "thrust_bars": "macd_thrust_bars",
             "vol_lb": "vol_lookback",
             "daily_vol_target": "target_daily_vol",
             "cooldown_bars": "cooldown_bars",
@@ -252,6 +259,8 @@ class BotDaemon:
                     "adx_length",
                     "vol_lookback",
                     "cooldown_bars",
+                    "macd_cross_grace_bars",
+                    "macd_thrust_bars",
                 }:
                     try:
                         value = int(value)
@@ -418,6 +427,11 @@ class BotDaemon:
             self.cfg.dry_run,
             ", ".join(self.cfg.symbol_universe),
         )
+        product_map = {
+            sym: sym.replace("/", "-") for sym in self.cfg.symbol_universe
+        }
+        if product_map:
+            logger.info("PRODUCT_MAP %s", product_map)
         await self.shutdown_event.wait()
         await self.stop()
 
@@ -496,7 +510,17 @@ class BotDaemon:
                 logger.info("Skip %s at %s (already processed)", symbol, candle_key)
                 return
             self.state.update_market_price(symbol, last_price)
-            signal_result = compute_signal(df, self.params)
+            position = self.broker.get_position(symbol)
+            current_qty = float(position.get("qty", 0.0))
+            position_state = "FLAT"
+            if current_qty > 0:
+                position_state = "LONG"
+            elif current_qty < 0:
+                position_state = "SHORT"
+
+            signal_result = compute_signal(
+                df, self.params, position_state=position_state
+            )
             cooldown_ts = self._last_exit_timestamp(symbol)
             current_ts = (
                 last_close.to_pydatetime()
@@ -521,8 +545,6 @@ class BotDaemon:
             equity = _extract_equity(
                 account, self.cfg.start_cash, self.cfg.quote_currency
             )
-            position = self.broker.get_position(symbol)
-            current_qty = float(position.get("qty", 0.0))
             target_fraction = max(
                 self.cfg.min_size,
                 min(
