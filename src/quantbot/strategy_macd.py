@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-import talib  # type: ignore
+import pandas_ta as ta  # type: ignore
 
 
 @dataclass
@@ -77,25 +77,24 @@ def compute_indicators(
     params: StrategyParams,
 ) -> pd.DataFrame:
     df = _to_dataframe(data)
-    closes = df["close"].values.astype(float)
-    highs = df["high"].values.astype(float)
-    lows = df["low"].values.astype(float)
-    macd, macd_signal, macd_hist = talib.MACD(
-        closes,
-        fastperiod=int(params.macd_fast),
-        slowperiod=int(params.macd_slow),
-        signalperiod=int(params.macd_signal),
-    )
-    adx = talib.ADX(
-        highs,
-        lows,
-        closes,
-        timeperiod=int(params.adx_length),
-    )
-    df["macd"] = macd
-    df["macd_signal"] = macd_signal
-    df["macd_hist"] = macd_hist
-    df["adx"] = adx
+    closes = df["close"]
+    highs = df["high"]
+    lows = df["low"]
+    
+    # pandas-ta MACD returns DataFrame with column names like MACD_12_26_9
+    macd_result = ta.macd(closes, fast=int(params.macd_fast), slow=int(params.macd_slow), signal=int(params.macd_signal))
+    macd_col = f"MACD_{params.macd_fast}_{params.macd_slow}_{params.macd_signal}"
+    macd_signal_col = f"MACDs_{params.macd_fast}_{params.macd_slow}_{params.macd_signal}"  
+    macd_hist_col = f"MACDh_{params.macd_fast}_{params.macd_slow}_{params.macd_signal}"
+    
+    df["macd"] = macd_result[macd_col]
+    df["macd_signal"] = macd_result[macd_signal_col]
+    df["macd_hist"] = macd_result[macd_hist_col]
+    
+    # pandas-ta ADX
+    adx_result = ta.adx(highs, lows, closes, length=int(params.adx_length))
+    adx_col = f"ADX_{params.adx_length}"
+    df["adx"] = adx_result[adx_col]
     returns = df["close"].pct_change()
     df["returns"] = returns
     bars_per_day = _bars_per_day(params.bar_minutes)
