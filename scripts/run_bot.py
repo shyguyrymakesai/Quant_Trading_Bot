@@ -8,6 +8,7 @@ if str(SRC) not in sys.path:
 
 from quantbot.scheduler import start_scheduler, tick
 
+
 async def main():
     # Kick one immediate run, then start scheduler
     await tick()
@@ -18,6 +19,7 @@ async def main():
             await asyncio.sleep(3600)
     except KeyboardInterrupt:
         print("Shutting down bot...")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
