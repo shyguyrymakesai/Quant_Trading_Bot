@@ -97,9 +97,7 @@ def compute_indicators(
             df["macd_signal"] = macd_df[macd_cols[1]]
             df["macd_hist"] = macd_df[macd_cols[2]]
 
-    adx_df = ta.adx(
-        df["high"], df["low"], df["close"], length=int(params.adx_length)
-    )
+    adx_df = ta.adx(df["high"], df["low"], df["close"], length=int(params.adx_length))
     if adx_df is not None and not adx_df.empty:
         adx_cols = [c for c in adx_df.columns if c.startswith("ADX")]
         if adx_cols:

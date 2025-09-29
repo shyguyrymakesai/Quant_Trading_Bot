@@ -427,9 +427,7 @@ class BotDaemon:
             self.cfg.dry_run,
             ", ".join(self.cfg.symbol_universe),
         )
-        product_map = {
-            sym: sym.replace("/", "-") for sym in self.cfg.symbol_universe
-        }
+        product_map = {sym: sym.replace("/", "-") for sym in self.cfg.symbol_universe}
         if product_map:
             logger.info("PRODUCT_MAP %s", product_map)
         await self.shutdown_event.wait()

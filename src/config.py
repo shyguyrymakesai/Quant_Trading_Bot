@@ -250,6 +250,7 @@ def _flatten_yaml(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out["macd_signal"] = macd_cfg.get("signal", 9)
     out["adx_len"] = adx_cfg.get("length", 14)
     out["adx_threshold"] = adx_cfg.get("threshold", 20)
+
     def _first_defined(*values):
         for value in values:
             if value is not None:

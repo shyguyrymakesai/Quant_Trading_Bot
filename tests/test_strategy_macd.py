@@ -154,7 +154,6 @@ def make_noisy_ohlcv(periods: int = 60):
     return data
 
 
-
 def test_apply_cooldown_blocks_buy_within_window():
     params = StrategyParams(cooldown_bars=2, bar_minutes=60)
     base_result = SignalResult(
@@ -191,7 +190,9 @@ def test_apply_cooldown_allows_entry_after_window():
     )
     now = datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
     last_exit = now - timedelta(hours=4)
-    allowed = apply_cooldown(base_result, params, last_exit_ts=last_exit, current_ts=now)
+    allowed = apply_cooldown(
+        base_result, params, last_exit_ts=last_exit, current_ts=now
+    )
     assert allowed.signal == Signal.BUY
     assert allowed.meta["cooldown_active"] is False
     assert allowed.meta["cooldown_ok"] is True
@@ -204,4 +205,3 @@ def test_compute_indicators_respects_vol_lookback():
     df_short = compute_indicators(noisy, params_short)
     df_long = compute_indicators(noisy, params_long)
     assert df_long["realized_vol"].iloc[-1] <= df_short["realized_vol"].iloc[-1]
-
