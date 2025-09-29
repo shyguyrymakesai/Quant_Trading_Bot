@@ -10,6 +10,7 @@ RUN apt-get update \
         autoconf \
         automake \
         libtool \
+        curl \
         wget \
         ca-certificates \
         tzdata \
@@ -18,16 +19,16 @@ RUN apt-get update \
 # ---- build & install TA-Lib C library (0.4.0) ----
 ARG TA_LIB_VERSION=0.4.0
 RUN set -eux; \
-    wget -q "https://downloads.sourceforge.net/ta-lib/ta-lib-${TA_LIB_VERSION}-src.tar.gz"; \
-    tar -xzf "ta-lib-${TA_LIB_VERSION}-src.tar.gz"; \
-    cd "ta-lib-${TA_LIB_VERSION}"; \
+    curl -fsSL "https://sourceforge.net/projects/ta-lib/files/ta-lib/${TA_LIB_VERSION}/ta-lib-${TA_LIB_VERSION}-src.tar.gz/download" -o /tmp/ta-lib-src.tgz; \
+    mkdir -p /tmp/ta-lib; \
+    tar -xzf /tmp/ta-lib-src.tgz -C /tmp/ta-lib; \
+    cd /tmp/ta-lib/ta-lib-${TA_LIB_VERSION}; \
     ./configure --prefix=/usr/local; \
     make -j"$(nproc)"; \
     make install; \
-    cd /; \
-    rm -rf "ta-lib-${TA_LIB_VERSION}" "ta-lib-${TA_LIB_VERSION}-src.tar.gz"; \
     echo "/usr/local/lib" > /etc/ld.so.conf.d/ta-lib.conf; \
-    ldconfig
+    ldconfig; \
+    rm -rf /tmp/ta-lib /tmp/ta-lib-src.tgz
 
 WORKDIR /app
 
