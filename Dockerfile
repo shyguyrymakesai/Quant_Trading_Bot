@@ -17,4 +17,4 @@ RUN pip install -r requirements.txt
 COPY . .
 
 # Default command
-CMD ["python", "src/run_once.py"]
+CMD ["python", "scripts/run_bot.py"]

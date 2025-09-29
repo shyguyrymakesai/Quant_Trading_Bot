@@ -3,7 +3,11 @@ import asyncio
 from datetime import datetime
 from quantbot.config import settings
 from quantbot.data_adapter import fetch_ohlcv
-from quantbot.signal_engine import compute_indicators, last_signal, volatility_target_size
+from quantbot.signal_engine import (
+    compute_indicators,
+    last_signal,
+    volatility_target_size,
+)
 from quantbot.execution_adapter import place_order, _exchange_auth, place_signal
 from quantbot.db import log_trade
 from quantbot.csv_logger import log_paper_trade
@@ -73,10 +77,10 @@ async def tick():
 
 def start_scheduler():
     sched = AsyncIOScheduler(timezone="UTC")
-    # run on the hour
-    sched.add_job(tick, "cron", minute=0)
+    # run twice per hour
+    sched.add_job(tick, "cron", minute="0,30")
     sched.start()
-    print("Scheduler started; running hourly.")
+    print("Scheduler started; running every 30 minutes.")
 
 
 if __name__ == "__main__":
